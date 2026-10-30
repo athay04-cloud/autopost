@@ -90,6 +90,66 @@ export default function App() {
     localStorage.setItem('metus_selected_group_ids', JSON.stringify(selectedGroupIds));
   }, [selectedGroupIds]);
 
+  // Listener sinkronisasi otomatis dari Extension Chrome (dashboard_bridge.js)
+  React.useEffect(() => {
+    const handleExtensionSync = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'METUS_EXTENSION_SYNC') {
+        const { userId, groups: syncedGroups } = event.data;
+        if (userId) {
+          setIsFbConnected(true);
+          const nameStr = `Facebook User (${String(userId).slice(0, 8)})`;
+          setConnectedFbName(nameStr);
+          localStorage.setItem('metus_fb_connected', 'true');
+          localStorage.setItem('metus_fb_name', nameStr);
+
+          const realIdentity: FacebookIdentity = {
+            id: `fb_real_${userId}`,
+            name: nameStr,
+            type: 'personal',
+            badge: 'Chrome Active Session',
+            avatarColor: 'from-blue-600 via-sky-600 to-indigo-700',
+            avatarInitials: 'FB',
+            description: `Akun Facebook aktif dari Chrome (UID: ${userId})`,
+          };
+          setIdentities((prev) => [realIdentity, ...prev.filter((id) => id.id !== realIdentity.id)]);
+          setActiveIdentity(realIdentity);
+        }
+
+        if (Array.isArray(syncedGroups) && syncedGroups.length > 0) {
+          const formatted: FacebookGroup[] = syncedGroups.map((g: any, idx: number) => ({
+            id: String(g.id),
+            name: g.name || `Grup Facebook ${g.id}`,
+            category: 'community',
+            memberCount: 'Aktif',
+            membersNumeric: 1000,
+            privacy: 'public',
+            role: 'member',
+            avatarBg: idx % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600',
+            avatarText: (g.name ? g.name.slice(0, 2) : 'FB').toUpperCase(),
+            allowAnonymous: true,
+            joinedYear: 2024,
+          }));
+
+          setGroups((prev) => {
+            const existingIds = new Set(formatted.map((f) => f.id));
+            return [...formatted, ...prev.filter((p) => !existingIds.has(p.id))];
+          });
+          setSelectedGroupIds(formatted.map((f) => f.id));
+          addLog('success', `Ekstensi Chrome berhasil menyinkronkan ${formatted.length} grup Facebook asli ke dashboard!`);
+        }
+      }
+    };
+
+    window.addEventListener('message', handleExtensionSync);
+
+    // Request sync from bridge if already loaded
+    setTimeout(() => {
+      window.postMessage({ type: 'METUS_REQUEST_SYNC' }, '*');
+    }, 1000);
+
+    return () => window.removeEventListener('message', handleExtensionSync);
+  }, []);
+
   // Scenarios
   const [scenarios, setScenarios] = React.useState<PostScenario[]>(() => {
     const saved = localStorage.getItem('metus_scenarios');

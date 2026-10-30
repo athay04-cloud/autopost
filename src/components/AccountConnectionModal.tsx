@@ -46,6 +46,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
   const [errorNotice, setErrorNotice] = React.useState('');
   const [isDownloading, setIsDownloading] = React.useState(false);
   const [downloadSuccess, setDownloadSuccess] = React.useState(false);
+  const [dashboardUrl, setDashboardUrl] = React.useState('https://athay04-cloud.github.io/autopost/');
 
   // File inspector state
   const [selectedFileName, setSelectedFileName] = React.useState<string>('manifest.json');
@@ -59,7 +60,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
   const handleDownloadZip = async () => {
     try {
       setIsDownloading(true);
-      await downloadExtensionZip();
+      await downloadExtensionZip(dashboardUrl.trim() || 'https://athay04-cloud.github.io/autopost/');
       setIsDownloading(false);
       setDownloadSuccess(true);
       setTimeout(() => setDownloadSuccess(false), 4000);
@@ -266,6 +267,26 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     </>
                   )}
                 </button>
+              </div>
+
+              {/* Target Dashboard URL Configuration */}
+              <div className="p-3.5 rounded-xl border border-blue-200 dark:border-blue-900/60 bg-blue-50/50 dark:bg-blue-950/20 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                    <ExternalLink className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                    <span>Target URL Web Dashboard:</span>
+                  </label>
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    Dibuka saat tombol "Buka Web Dashboard" di popup ekstensi diklik
+                  </span>
+                </div>
+                <input
+                  type="url"
+                  value={dashboardUrl}
+                  onChange={(e) => setDashboardUrl(e.target.value)}
+                  placeholder="https://athay04-cloud.github.io/autopost/"
+                  className="w-full px-3 py-1.5 text-xs font-mono font-medium bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-blue-600 dark:text-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
               </div>
 
               {/* 4-Step Installation Walkthrough */}

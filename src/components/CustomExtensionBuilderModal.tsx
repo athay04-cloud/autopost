@@ -33,6 +33,7 @@ export const CustomExtensionBuilderModal: React.FC<CustomExtensionBuilderModalPr
   const [extDescription, setExtDescription] = React.useState('Ekstensi kustom untuk otomasi posting dan pengelolaan grup Facebook pribadi.');
   const [extTemplate, setExtTemplate] = React.useState<ExtensionTemplate>('fb_autopost');
   const [themeColor, setThemeColor] = React.useState('#2563eb'); // blue
+  const [dashboardUrl, setDashboardUrl] = React.useState('https://athay04-cloud.github.io/autopost/');
 
   // Active file preview
   const [activeFile, setActiveFile] = React.useState<string>('manifest.json');
@@ -74,6 +75,14 @@ export const CustomExtensionBuilderModal: React.FC<CustomExtensionBuilderModalPr
             ],
           }
         : {}),
+      externally_connectable: {
+        matches: [
+          'https://athay04-cloud.github.io/*',
+          'https://*.github.io/*',
+          'https://*.run.app/*',
+          'http://localhost:*/*',
+        ],
+      },
     };
 
     // 2. Background Script

@@ -6,6 +6,8 @@ export interface ExtensionFileDefinition {
   content: string;
 }
 
+export const DEFAULT_DASHBOARD_URL = 'https://athay04-cloud.github.io/autopost/';
+
 export const EXTENSION_FILES: ExtensionFileDefinition[] = [
   {
     name: 'manifest.json',
@@ -14,10 +16,15 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.0.0',
-        description: 'Ekstensi jembatan otomatisasi posting Facebook Group dengan anti-ban delay dan spintax.',
+        version: '1.0.1',
+        description: 'Ekstensi jembatan otomatisasi posting Facebook Group dengan anti-ban delay, spintax, dan sinkronisasi dashboard.',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
-        host_permissions: ['https://*.facebook.com/*', 'https://*.fb.com/*'],
+        host_permissions: [
+          'https://*.facebook.com/*',
+          'https://*.fb.com/*',
+          'https://athay04-cloud.github.io/*',
+          'https://*.github.io/*',
+        ],
         background: {
           service_worker: 'background.js',
         },
@@ -27,11 +34,29 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
         },
         content_scripts: [
           {
-            matches: ['https://*.facebook.com/groups/*'],
+            matches: ['https://*.facebook.com/*'],
             js: ['content.js'],
             run_at: 'document_idle',
           },
+          {
+            matches: [
+              'https://athay04-cloud.github.io/*',
+              'https://*.github.io/*',
+              'https://*.run.app/*',
+              'http://localhost:*/*',
+            ],
+            js: ['dashboard_bridge.js'],
+            run_at: 'document_idle',
+          },
         ],
+        externally_connectable: {
+          matches: [
+            'https://athay04-cloud.github.io/*',
+            'https://*.github.io/*',
+            'https://*.run.app/*',
+            'http://localhost:*/*',
+          ],
+        },
       },
       null,
       2
@@ -39,11 +64,13 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
   },
   {
     name: 'background.js',
-    description: 'Service worker untuk membaca cookie Facebook (c_user & xs) dan orkestrasi postingan',
-    content: `// Metus Auto-Post - Chrome Extension Background Service Worker (Manifest V3)
-console.log("[Metus Extension] Service worker initialized.");
+    description: 'Service worker untuk membaca cookie Facebook, scan grup, dan menghubungkan ke dashboard',
+    content: `// Metus Auto-Post - Background Service Worker (Manifest V3)
+console.log("[Metus Extension] Service worker running.");
 
-// Helper untuk membaca cookie login Facebook aktif dari Chrome
+const DASHBOARD_URL = "https://athay04-cloud.github.io/autopost/";
+
+// 1. Membaca cookie sesi Facebook aktif dari Chrome
 async function getFacebookSession() {
   return new Promise((resolve) => {
     chrome.cookies.getAll({ domain: ".facebook.com" }, (cookies) => {
@@ -61,49 +88,135 @@ async function getFacebookSession() {
   });
 }
 
-// Mengambil daftar grup yang diikuti pengguna dari Facebook mbasic
+// 2. Scan grup dari tab Facebook yang sedang terbuka di browser
+async function scanGroupsFromOpenTabs() {
+  const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
+  let extracted = [];
+
+  for (const tab of tabs) {
+    if (!tab.id) continue;
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const groups = [];
+          const links = document.querySelectorAll('a[href*="/groups/"]');
+          links.forEach((a) => {
+            const href = a.getAttribute('href') || '';
+            const match = href.match(/\\/groups\\/([0-9]{8,25})/);
+            const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
+            const cleanName = rawText.split('\\n')[0].trim();
+
+            if (match && match[1] && cleanName.length > 2) {
+              const ignore = ['feed', 'discover', 'joins', 'create', 'notifications', 'beranda', 'jelajahi'];
+              if (!ignore.some(ig => cleanName.toLowerCase().includes(ig))) {
+                if (!groups.some(g => g.id === match[1])) {
+                  groups.push({
+                    id: match[1],
+                    name: cleanName,
+                    url: 'https://www.facebook.com/groups/' + match[1],
+                  });
+                }
+              }
+            }
+          });
+          return groups;
+        },
+      });
+
+      if (results && results[0] && Array.isArray(results[0].result)) {
+        extracted = [...extracted, ...results[0].result];
+      }
+    } catch (e) {
+      console.warn("Script scan tab skipped:", e);
+    }
+  }
+
+  // Remove duplicates
+  const unique = [];
+  extracted.forEach((item) => {
+    if (!unique.some(u => u.id === item.id)) {
+      unique.push(item);
+    }
+  });
+
+  return unique;
+}
+
+// 3. Scan grup via Fetch HTML & JSON (Multiple fallback endpoints)
+async function fetchGroupsFromNetwork() {
+  const endpoints = [
+    "https://m.facebook.com/groups/?seemore",
+    "https://mbasic.facebook.com/groups/?seemore",
+    "https://www.facebook.com/groups/joins/"
+  ];
+
+  const found = [];
+
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { credentials: "include" });
+      const html = await res.text();
+
+      // Pola Regex 1: /groups/123456789/
+      const regexLink = /<a[^>]+href="[^"]*\\/groups\\/([0-9]{8,25})[^"]*"[^>]*>([^<]+)<\\/a>/g;
+      let m;
+      while ((m = regexLink.exec(html)) !== null) {
+        if (m[1] && m[2] && !found.some(g => g.id === m[1])) {
+          const name = m[2].trim();
+          if (name.length > 2 && !name.toLowerCase().includes('seemore')) {
+            found.push({ id: m[1], name, url: "https://www.facebook.com/groups/" + m[1] });
+          }
+        }
+      }
+
+      // Pola Regex 2: Embedded Relay GraphQL JSON
+      const regexJson = /"id":"([0-9]{9,25})"[^}]*?"name":"([^"]+)"/g;
+      while ((m = regexJson.exec(html)) !== null) {
+        if (m[1] && m[2] && !found.some(g => g.id === m[1])) {
+          found.push({ id: m[1], name: m[2], url: "https://www.facebook.com/groups/" + m[1] });
+        }
+      }
+
+      if (found.length > 0) break;
+    } catch (err) {
+      console.warn("Fetch failed for " + url, err);
+    }
+  }
+
+  return found;
+}
+
+// 4. Handler Utama Pengambilan Grup
 async function fetchUserFacebookGroups() {
   const session = await getFacebookSession();
   if (!session.isLoggedIn) {
     return { success: false, error: "Belum login di Facebook pada browser Chrome ini." };
   }
 
-  try {
-    const response = await fetch("https://mbasic.facebook.com/groups/?seemore", {
-      headers: {
-        "Accept": "text/html",
-      },
-      credentials: "include",
-    });
+  // Coba scan dari tab Facebook yang sedang terbuka dulu
+  let groups = await scanGroupsFromOpenTabs();
 
-    const html = await response.text();
-    const groups = [];
-
-    // Parse grup IDs & names dari DOM mbasic
-    const groupRegex = /<a href="\\/groups\\/([0-9]+)\\/?\\?[^"]*">([^<]+)<\\/a>/g;
-    let match;
-    while ((match = groupRegex.exec(html)) !== null) {
-      if (match[1] && match[2] && !groups.some(g => g.id === match[1])) {
-        groups.push({
-          id: match[1],
-          name: match[2].trim(),
-          url: "https://www.facebook.com/groups/" + match[1],
-        });
-      }
-    }
-
-    return {
-      success: true,
-      userId: session.userId,
-      groups: groups,
-    };
-  } catch (err) {
-    console.error("[Metus] Error fetching groups:", err);
-    return { success: false, error: err.message };
+  // Jika belum ada tab FB yang terbuka, coba request jaringan
+  if (groups.length === 0) {
+    groups = await fetchGroupsFromNetwork();
   }
+
+  // Simpan ke storage local ekstensi
+  await chrome.storage.local.set({
+    metus_fb_uid: session.userId,
+    metus_groups: groups,
+    metus_last_sync: Date.now(),
+  });
+
+  return {
+    success: true,
+    userId: session.userId,
+    groups: groups,
+  };
 }
 
-// Listener komunikasi dari Popup dan Web Dashboard
+// Listener pesan dari Popup & Dashboard
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "CHECK_FB_STATUS") {
     getFacebookSession().then(sendResponse);
@@ -115,24 +228,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === "EXECUTE_POST") {
-    // Membuka tab grup Facebook dan menyuntikkan postingan otomatis
-    chrome.tabs.create({ url: "https://www.facebook.com/groups/" + request.groupId, active: false }, (tab) => {
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-        if (tabId === tab.id && info.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(listener);
-          // Kirim perintah posting ke content.js
-          setTimeout(() => {
-            chrome.tabs.sendMessage(tab.id, {
-              action: "SUBMIT_POST_DOM",
-              content: request.content,
-              firstComment: request.firstComment,
-            }, (res) => {
-              sendResponse(res || { success: true });
-            });
-          }, 4000);
-        }
+  if (request.action === "GET_SAVED_GROUPS") {
+    chrome.storage.local.get(["metus_fb_uid", "metus_groups"], (data) => {
+      sendResponse({
+        userId: data.metus_fb_uid || null,
+        groups: data.metus_groups || [],
       });
+    });
+    return true;
+  }
+
+  if (request.action === "OPEN_FB_GROUPS_TAB") {
+    chrome.tabs.create({ url: "https://www.facebook.com/groups/joins/" }, (tab) => {
+      sendResponse({ success: true, tabId: tab.id });
     });
     return true;
   }
@@ -141,27 +249,57 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   },
   {
     name: 'content.js',
-    description: 'Content script yang menyuntikkan teks dan menekan tombol posting di halaman Facebook Group',
-    content: `// Metus Auto-Post - Content Script untuk DOM Facebook
-console.log("[Metus Content Script] Injected on Facebook Group.");
+    description: 'Content script yang berjalan di tab Facebook untuk otomasi form posting dan auto-scan',
+    content: `// Metus Auto-Post - Content Script untuk Facebook
+console.log("[Metus] Content script injected on Facebook tab.");
 
+// Auto scan grup dan simpan saat membuka Facebook
+function autoScanGroups() {
+  const links = document.querySelectorAll('a[href*="/groups/"]');
+  const found = [];
+  links.forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    const match = href.match(/\\/groups\\/([0-9]{8,25})/);
+    const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
+    const cleanName = rawText.split('\\n')[0].trim();
+
+    if (match && match[1] && cleanName.length > 2) {
+      if (!found.some(g => g.id === match[1])) {
+        found.push({
+          id: match[1],
+          name: cleanName,
+          url: 'https://www.facebook.com/groups/' + match[1],
+        });
+      }
+    }
+  });
+
+  if (found.length > 0) {
+    chrome.storage.local.get(["metus_groups"], (data) => {
+      const existing = data.metus_groups || [];
+      const merged = [...existing];
+      found.forEach(f => {
+        if (!merged.some(m => m.id === f.id)) merged.push(f);
+      });
+      chrome.storage.local.set({ metus_groups: merged });
+    });
+  }
+}
+
+setTimeout(autoScanGroups, 3000);
+
+// Listener kirim postingan otomatis
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "SUBMIT_POST_DOM") {
-    console.log("[Metus] Menjalankan otomasi pengisian form posting...");
-
-    // 1. Cari tombol komposer Facebook "Tulis sesuatu..." / "Write something..."
-    const composerTrigger = 
+    const composerTrigger =
       document.querySelector('[aria-label="Tulis sesuatu..."]') ||
       document.querySelector('[aria-label="Write something..."]') ||
       document.querySelector('div[role="button"][tabindex="0"] span');
 
-    if (composerTrigger) {
-      composerTrigger.click();
-    }
+    if (composerTrigger) composerTrigger.click();
 
     setTimeout(() => {
-      // 2. Cari area teks draft editor Facebook (Lexical/Draft.js)
-      const editor = 
+      const editor =
         document.querySelector('[role="textbox"][contenteditable="true"]') ||
         document.querySelector('div[data-lexical-editor="true"]');
 
@@ -170,8 +308,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         document.execCommand("insertText", false, request.content);
 
         setTimeout(() => {
-          // 3. Cari tombol Post / Kirim
-          const postButton = 
+          const postButton =
             document.querySelector('[aria-label="Post"]') ||
             document.querySelector('[aria-label="Kirim"]') ||
             document.querySelector('[aria-label="Posting"]');
@@ -180,11 +317,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             postButton.click();
             sendResponse({ success: true, message: "Post berhasil dikirim ke grup!" });
           } else {
-            sendResponse({ success: true, simulated: true, message: "Teks berhasil dimasukkan ke draft grup." });
+            sendResponse({ success: true, simulated: true, message: "Teks dimasukkan ke editor." });
           }
         }, 2000);
       } else {
-        sendResponse({ success: false, error: "Kotak editor Facebook tidak ditemukan di halaman ini." });
+        sendResponse({ success: false, error: "Editor Facebook tidak ditemukan." });
       }
     }, 2500);
 
@@ -194,8 +331,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 `,
   },
   {
+    name: 'dashboard_bridge.js',
+    description: 'Content script yang menyuntikkan data grup tersimpan langsung ke Web Dashboard athay04-cloud.github.io',
+    content: `// Metus Extension Bridge untuk Dashboard
+console.log("[Metus Bridge] Connecting extension data to Web Dashboard...");
+
+// Ambil sesi & grup tersimpan dari background
+chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
+  if (data && data.groups && data.groups.length > 0) {
+    console.log("[Metus Bridge] Menemukan " + data.groups.length + " grup untuk disinkronkan ke web!");
+    window.postMessage({
+      type: "METUS_EXTENSION_SYNC",
+      userId: data.userId,
+      groups: data.groups,
+    }, "*");
+  }
+});
+
+// Listener dari halaman web jika web meminta sinkronisasi ulang
+window.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "METUS_REQUEST_SYNC") {
+    chrome.runtime.sendMessage({ action: "FETCH_MY_GROUPS" }, (res) => {
+      window.postMessage({
+        type: "METUS_EXTENSION_SYNC",
+        userId: res?.userId,
+        groups: res?.groups || [],
+      }, "*");
+    });
+  }
+});
+`,
+  },
+  {
     name: 'popup.html',
-    description: 'Tampilan antarmuka mini ekstensi saat ikon diklik di browser toolbar',
+    description: 'Tampilan antarmuka mini popup ekstensi dengan tombol scan dan link dashboard',
     content: `<!DOCTYPE html>
 <html lang="id">
 <head>
@@ -203,7 +372,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   <title>Metus Auto-Post</title>
   <style>
     body {
-      width: 320px;
+      width: 330px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       margin: 0;
       padding: 16px;
@@ -214,12 +383,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       border-bottom: 1px solid #1e293b;
       padding-bottom: 10px;
     }
     .brand-title {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
       color: #38bdf8;
     }
@@ -227,7 +396,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       background: #1e293b;
       border-radius: 10px;
       padding: 12px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
       font-size: 12px;
     }
     .badge {
@@ -244,7 +413,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       display: block;
       width: 100%;
       box-sizing: border-box;
-      padding: 9px;
+      padding: 10px;
       margin-bottom: 8px;
       border: none;
       border-radius: 8px;
@@ -258,6 +427,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     .btn-primary:hover { background: #1d4ed8; }
     .btn-secondary { background: #334155; color: #e2e8f0; }
     .btn-secondary:hover { background: #475569; }
+    .btn-accent { background: #0284c7; color: #fff; }
+    .btn-accent:hover { background: #0369a1; }
+    .note {
+      font-size: 10px;
+      color: #94a3b8;
+      line-height: 1.4;
+      margin-top: 8px;
+      text-align: center;
+    }
+    #groupCountDisplay {
+      font-weight: bold;
+      color: #38bdf8;
+    }
   </style>
 </head>
 <body>
@@ -273,10 +455,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     <div style="color: #94a3b8; font-size: 11px;">Status Sesi Facebook di Chrome:</div>
     <div id="statusText" style="font-weight: 600; margin-top: 2px;">Memeriksa status...</div>
     <div id="statusBadge" class="badge badge-warn">Mengecek...</div>
+    <div style="margin-top: 8px; font-size: 11px; border-top: 1px solid #334155; padding-top: 6px;">
+      Grup Terdeteksi: <span id="groupCountDisplay">0 grup</span>
+    </div>
   </div>
 
-  <button id="btnSync" class="btn btn-primary">Sinkronkan ke Dashboard Metus</button>
-  <button id="btnOpenDashboard" class="btn btn-secondary">Buka Web Dashboard</button>
+  <button id="btnSync" class="btn btn-primary">1. Scan & Sinkronkan Grup Facebook</button>
+  <button id="btnOpenFbGroups" class="btn btn-accent">2. Buka Tab Facebook Groups (Scan Otomatis)</button>
+  <button id="btnOpenDashboard" class="btn btn-secondary">3. Buka Web Dashboard</button>
+
+  <div class="note">
+    Dashboard tujuan: <strong>https://athay04-cloud.github.io/autopost/</strong>
+  </div>
 
   <script src="popup.js"></script>
 </body>
@@ -285,15 +475,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   },
   {
     name: 'popup.js',
-    description: 'Skrip antarmuka popup',
-    content: `// Metus Popup Script
+    description: 'Skrip antarmuka popup untuk trigger scan dan navigasi ke https://athay04-cloud.github.io/autopost/',
+    content: `// Metus Popup Script - Updated dengan Direct Dashboard URL
 document.addEventListener("DOMContentLoaded", () => {
   const statusText = document.getElementById("statusText");
   const statusBadge = document.getElementById("statusBadge");
+  const groupCountDisplay = document.getElementById("groupCountDisplay");
   const btnSync = document.getElementById("btnSync");
+  const btnOpenFbGroups = document.getElementById("btnOpenFbGroups");
   const btnOpenDashboard = document.getElementById("btnOpenDashboard");
 
-  // Cek cookie Facebook di browser pengguna
+  // Alamat Web Dashboard Resmi Athay04
+  const DASHBOARD_URL = "https://athay04-cloud.github.io/autopost/";
+
+  // 1. Cek status sesi login & grup yang sudah tersimpan
   chrome.runtime.sendMessage({ action: "CHECK_FB_STATUS" }, (response) => {
     if (response && response.isLoggedIn) {
       statusText.textContent = "Akun Terhubung (UID: " + response.userId + ")";
@@ -306,18 +501,51 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
+  // Tampilkan jumlah grup yang tersimpan di memori
+  chrome.storage.local.get(["metus_groups"], (data) => {
+    const list = data.metus_groups || [];
+    groupCountDisplay.textContent = list.length + " grup tersimpan";
+  });
+
+  // 2. Tombol Scan & Sinkronkan Grup
   btnSync.addEventListener("click", () => {
+    btnSync.textContent = "Memindai Grup Facebook...";
+    btnSync.disabled = true;
+
     chrome.runtime.sendMessage({ action: "FETCH_MY_GROUPS" }, (res) => {
+      btnSync.disabled = false;
+      btnSync.textContent = "1. Scan & Sinkronkan Grup Facebook";
+
       if (res && res.success) {
-        alert("Berhasil mendeteksi " + res.groups.length + " grup dari akun Facebook Anda! Silakan beralih ke Dashboard Metus.");
+        const count = res.groups ? res.groups.length : 0;
+        groupCountDisplay.textContent = count + " grup tersimpan";
+
+        if (count > 0) {
+          alert("Sukses! Berhasil mendeteksi " + count + " grup dari akun Facebook Anda! Mengarahkan ke Dashboard...");
+          // Buka langsung web dashboard dengan parameter sync
+          chrome.tabs.create({ url: DASHBOARD_URL + "#sync_success=" + count });
+        } else {
+          const buka = confirm(
+            "Belum mendeteksi grup dari background. Apakah Anda ingin membuka tab Facebook Groups (facebook.com/groups/joins/) sekarang agar ekstensi dapat mendeteksi grup secara otomatis?"
+          );
+          if (buka) {
+            chrome.tabs.create({ url: "https://www.facebook.com/groups/joins/" });
+          }
+        }
       } else {
         alert("Pemberitahuan: Buka tab https://www.facebook.com terlebih dahulu dan pastikan Anda sudah login.");
       }
     });
   });
 
+  // 3. Tombol Buka Tab Facebook Groups untuk scan otomatis
+  btnOpenFbGroups.addEventListener("click", () => {
+    chrome.tabs.create({ url: "https://www.facebook.com/groups/joins/" });
+  });
+
+  // 4. Tombol Buka Web Dashboard (Menuju https://athay04-cloud.github.io/autopost/)
   btnOpenDashboard.addEventListener("click", () => {
-    chrome.tabs.create({ url: window.location.origin || "https://metus.io" });
+    chrome.tabs.create({ url: DASHBOARD_URL });
   });
 });
 `,
@@ -329,54 +557,44 @@ document.addEventListener("DOMContentLoaded", () => {
 PANDUAN LENGKAP CARA INSTALL EKSTENSI METUS AUTO-POST DI GOOGLE CHROME
 ========================================================================
 
+Versi: 1.0.1 (Diperbarui dengan Sinkronisasi Dashboard Athay04)
+URL Dashboard: https://athay04-cloud.github.io/autopost/
+
 Terima kasih telah mengunduh paket ekstensi Chrome Metus Auto-Post!
-Ikuti 4 langkah mudah berikut untuk memasangnya langsung ke browser Google Chrome Anda:
+Ikuti langkah berikut untuk memasangnya:
 
 ------------------------------------------------------------------------
 LANGKAH 1: EKSTRAK BERKAS ZIP
 ------------------------------------------------------------------------
-1. Buka folder Unduhan (Downloads) di komputer Anda.
-2. Cari file 'metus-auto-post-chrome-extension.zip' yang baru saja diunduh.
-3. Klik kanan pada file ZIP tersebut, lalu pilih 'Extract All' (Ekstrak Semua).
-4. Simpan di folder yang mudah ditemukan, misalnya: 'C:\\metus-extension' atau di Desktop.
-
-Pastikan di dalam folder tersebut terdapat file-file berikut:
-  - manifest.json
-  - background.js
-  - content.js
-  - popup.html
-  - popup.js
+1. Ekstrak 'metus-auto-post-chrome-extension.zip' ke folder komputer Anda.
+2. Pastikan file berikut ada di dalam folder:
+   - manifest.json
+   - background.js
+   - content.js
+   - dashboard_bridge.js
+   - popup.html
+   - popup.js
 
 ------------------------------------------------------------------------
-LANGKAH 2: BUKA HALAMAN EXTENSIONS DI GOOGLE CHROME
+LANGKAH 2: PASANG DI GOOGLE CHROME
 ------------------------------------------------------------------------
-1. Buka browser Google Chrome Anda.
-2. Ketik pada address bar (kolom alamat):
+1. Buka Google Chrome, ketik pada kolom alamat:
    chrome://extensions
-   lalu tekan Enter.
+2. Aktifkan "Developer mode" (Mode Pengembang) di pojok kanan atas.
+3. Klik tombol "Load unpacked" (Muat yang belum dibongkar) di pojok kiri atas.
+4. Pilih folder hasil ekstrak tadi.
 
 ------------------------------------------------------------------------
-LANGKAH 3: AKTIFKAN DEVELOPER MODE & LOAD UNPACKED
+LANGKAH 3: CARA SINKRONISASI GRUP AGAR TIDAK 0 GRUP
 ------------------------------------------------------------------------
-1. Di pojok kanan atas halaman Extensions, aktifkan saklar toggle:
-   "Developer mode" (Mode Pengembang).
-2. Setelah aktif, akan muncul 3 tombol di pojok kiri atas:
-   - "Load unpacked" (Muat yang belum dibongkar)
-   - "Pack extension"
-   - "Update"
-3. Klik tombol "Load unpacked".
-4. Pilih folder hasil ekstrak tadi (folder yang berisi manifest.json).
-5. Klik "Select Folder" (Pilih Folder).
-
-------------------------------------------------------------------------
-LANGKAH 4: SELESAI & MULAI MENGGUNAKAN
-------------------------------------------------------------------------
-1. Ekstensi "Metus Auto-Post - Facebook Automation Bridge" kini telah terpasang di Chrome Anda!
-2. Ikon ekstensi akan muncul di bilah alat (toolbar) Chrome di pojok kanan atas.
-3. Buka tab https://www.facebook.com dan pastikan Anda sudah login.
-4. Kembali ke Dashboard Metus Auto-Post, status akan otomatis terhubung dan grup Facebook asli Anda siap diposting dengan delay acak anti-spam!
-
-Jika ada pertanyaan, kunjungi dashboard Metus atau hubungi tim support kami.
+1. Buka tab baru di Chrome dan kunjungi:
+   https://www.facebook.com/groups/joins/
+2. Halaman tersebut akan menampilkan seluruh daftar grup yang Anda ikuti.
+3. Ekstensi secara otomatis memindai seluruh ID & nama grup dari halaman tersebut!
+4. Klik ikon ekstensi Metus di toolbar kanan atas, lalu klik tombol:
+   "Scan & Sinkronkan Grup Facebook"
+5. Seluruh grup Anda akan langsung terdeteksi dan tersimpan ke Web Dashboard:
+   https://athay04-cloud.github.io/autopost/
 `,
   },
 ];
@@ -384,22 +602,29 @@ Jika ada pertanyaan, kunjungi dashboard Metus atau hubungi tim support kami.
 /**
  * Generates and triggers download of a real .zip file containing all extension files
  */
-export async function downloadExtensionZip(): Promise<void> {
+export async function downloadExtensionZip(
+  dashboardUrl: string = DEFAULT_DASHBOARD_URL
+): Promise<void> {
   const zip = new JSZip();
 
-  // Add all extension files to the ZIP root
   for (const file of EXTENSION_FILES) {
-    zip.file(file.name, file.content);
+    let content = file.content;
+    if (dashboardUrl) {
+      // Replace default URL if customized
+      content = content.replace(
+        new RegExp('https://athay04-cloud.github.io/autopost/', 'g'),
+        dashboardUrl
+      );
+    }
+    zip.file(file.name, content);
   }
 
-  // Generate binary blob
   const zipBlob = await zip.generateAsync({
     type: 'blob',
     compression: 'DEFLATE',
     compressionOptions: { level: 9 },
   });
 
-  // Trigger browser download
   const url = URL.createObjectURL(zipBlob);
   const anchor = document.createElement('a');
   anchor.href = url;
