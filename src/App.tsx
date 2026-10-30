@@ -7,6 +7,8 @@ import { PostPreviewModal } from './components/PostPreviewModal';
 import { SpintaxModal } from './components/SpintaxModal';
 import { SavePresetModal } from './components/SavePresetModal';
 import { ImportExportModal } from './components/ImportExportModal';
+import { AccountConnectionModal } from './components/AccountConnectionModal';
+import { CustomExtensionBuilderModal } from './components/CustomExtensionBuilderModal';
 import {
   FacebookGroup,
   FacebookIdentity,
@@ -43,11 +45,21 @@ export default function App() {
   }, [isDarkMode]);
 
   // Identities & Active Identity
-  const [identities] = React.useState<FacebookIdentity[]>(INITIAL_IDENTITIES);
+  const [identities, setIdentities] = React.useState<FacebookIdentity[]>(INITIAL_IDENTITIES);
   const [activeIdentity, setActiveIdentity] = React.useState<FacebookIdentity>(INITIAL_IDENTITIES[0]);
 
+  // Facebook Connection state
+  const [isFbConnected, setIsFbConnected] = React.useState<boolean>(() => {
+    return localStorage.getItem('metus_fb_connected') === 'true';
+  });
+  const [connectedFbName, setConnectedFbName] = React.useState<string>(() => {
+    return localStorage.getItem('metus_fb_name') || 'Akun Chrome Saya';
+  });
+  const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
+  const [isCustomBuilderOpen, setIsCustomBuilderOpen] = React.useState(false);
+
   // Facebook Groups & Presets
-  const [groups] = React.useState<FacebookGroup[]>(MOCK_FACEBOOK_GROUPS);
+  const [groups, setGroups] = React.useState<FacebookGroup[]>(MOCK_FACEBOOK_GROUPS);
   const [presets, setPresets] = React.useState<GroupPreset[]>(() => {
     const saved = localStorage.getItem('metus_presets');
     if (saved) {
@@ -247,6 +259,54 @@ export default function App() {
         addLog('success', `Imported ${data.length} post scenarios.`);
       }
     }
+  };
+
+  const handleConnectRealAccount = (accountData: {
+    userName: string;
+    userId: string;
+    fetchedGroups: FacebookGroup[];
+  }) => {
+    setIsFbConnected(true);
+    setConnectedFbName(accountData.userName);
+    localStorage.setItem('metus_fb_connected', 'true');
+    localStorage.setItem('metus_fb_name', accountData.userName);
+
+    // Create new identity for real account
+    const realIdentity: FacebookIdentity = {
+      id: `fb_real_${accountData.userId}`,
+      name: accountData.userName,
+      type: 'personal',
+      badge: 'Chrome Active Session',
+      avatarColor: 'from-blue-600 via-sky-600 to-indigo-700',
+      avatarInitials: accountData.userName.slice(0, 2).toUpperCase(),
+      description: `Akun Facebook aktif dari Chrome (UID: ${accountData.userId})`,
+    };
+
+    setIdentities((prev) => [realIdentity, ...prev.filter((id) => id.id !== realIdentity.id)]);
+    setActiveIdentity(realIdentity);
+
+    // Merge fetched real groups
+    if (accountData.fetchedGroups.length > 0) {
+      setGroups((prev) => {
+        const existingIds = new Set(accountData.fetchedGroups.map((g) => g.id));
+        return [...accountData.fetchedGroups, ...prev.filter((g) => !existingIds.has(g.id))];
+      });
+      setSelectedGroupIds(accountData.fetchedGroups.map((g) => g.id));
+    }
+
+    addLog('success', `Sesi Chrome terhubung: ${accountData.userName} (UID: ${accountData.userId}). ${accountData.fetchedGroups.length} grup disinkronkan.`);
+  };
+
+  const handleDisconnectAccount = () => {
+    setIsFbConnected(false);
+    setConnectedFbName('');
+    localStorage.removeItem('metus_fb_connected');
+    localStorage.removeItem('metus_fb_name');
+    setIdentities(INITIAL_IDENTITIES);
+    setActiveIdentity(INITIAL_IDENTITIES[0]);
+    setGroups(MOCK_FACEBOOK_GROUPS);
+    setSelectedGroupIds(MOCK_FACEBOOK_GROUPS.slice(0, 6).map((g) => g.id));
+    addLog('warn', 'Koneksi akun Chrome diputuskan. Kembali ke database simulasi.');
   };
 
   // Mock Posting Runner with Threading & Delay Randomizer
@@ -454,6 +514,10 @@ export default function App() {
         isDarkMode={isDarkMode}
         onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
         onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
+        onOpenConnectModal={() => setIsAccountModalOpen(true)}
+        onOpenCustomBuilder={() => setIsCustomBuilderOpen(true)}
+        isFbConnected={isFbConnected}
+        connectedFbName={connectedFbName}
         isPosting={isPosting}
       />
 
@@ -552,6 +616,22 @@ export default function App() {
             : scenarios
         }
         onImport={handleImportData}
+      />
+
+      {/* Chrome & Facebook Session Connection Modal */}
+      <AccountConnectionModal
+        isOpen={isAccountModalOpen}
+        onClose={() => setIsAccountModalOpen(false)}
+        isConnected={isFbConnected}
+        connectedUserName={connectedFbName}
+        onConnectRealAccount={handleConnectRealAccount}
+        onDisconnectAccount={handleDisconnectAccount}
+      />
+
+      {/* Studio Pembuat Ekstensi Sendiri */}
+      <CustomExtensionBuilderModal
+        isOpen={isCustomBuilderOpen}
+        onClose={() => setIsCustomBuilderOpen(false)}
       />
     </div>
   );
