@@ -580,9 +580,9 @@ export default function App() {
                 pendingPostResolvers.current.delete(resultId);
                 resolve({
                   success: false,
-                  error: 'Timeout: Ekstensi belum menyelesaikan postingan dalam 40 detik. Pastikan tab Facebook terbuka dan memiliki izin posting.',
+                  error: 'Timeout: Ekstensi membutuhkan waktu lebih dari 120 detik. Pastikan tab Facebook dapat memuat halaman.',
                 });
-              }, 40000);
+              }, 120000);
 
               pendingPostResolvers.current.set(resultId, (res) => {
                 clearTimeout(timeout);
