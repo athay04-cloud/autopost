@@ -1,0 +1,6 @@
+{
+  "name": "Metus Auto-Post",
+  "description": "Professional Facebook Group Automation & Campaign Manager with multi-thread scheduling, spintax engine, and target selector.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
