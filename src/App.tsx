@@ -59,7 +59,18 @@ export default function App() {
   const [isCustomBuilderOpen, setIsCustomBuilderOpen] = React.useState(false);
 
   // Facebook Groups & Presets
-  const [groups, setGroups] = React.useState<FacebookGroup[]>(MOCK_FACEBOOK_GROUPS);
+  const [groups, setGroups] = React.useState<FacebookGroup[]>(() => {
+    const saved = localStorage.getItem('metus_saved_groups');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch {
+        // fallback
+      }
+    }
+    return MOCK_FACEBOOK_GROUPS;
+  });
   const [presets, setPresets] = React.useState<GroupPreset[]>(() => {
     const saved = localStorage.getItem('metus_presets');
     if (saved) {
@@ -291,6 +302,17 @@ export default function App() {
     setPresets(updated);
     localStorage.setItem('metus_presets', JSON.stringify(updated));
     addLog('success', `Saved new custom preset "${newPreset.name}" with ${selectedGroupIds.length} groups.`);
+  };
+
+  const handleAddCustomGroups = (newGroups: FacebookGroup[]) => {
+    setGroups((prev) => {
+      const existingIds = new Set(newGroups.map((g) => g.id));
+      const updated = [...newGroups, ...prev.filter((g) => !existingIds.has(g.id))];
+      localStorage.setItem('metus_saved_groups', JSON.stringify(updated));
+      return updated;
+    });
+    setSelectedGroupIds(newGroups.map((g) => g.id));
+    addLog('success', `Berhasil menambahkan ${newGroups.length} grup Facebook asli ke daftar target!`);
   };
 
   // Scenario Handlers
@@ -674,6 +696,7 @@ export default function App() {
               onSelectAllVisible={handleSelectAllVisible}
               onDeselectAllVisible={handleDeselectAllVisible}
               onApplyPreset={handleApplyPreset}
+              onAddCustomGroups={handleAddCustomGroups}
             />
           </div>
         </div>

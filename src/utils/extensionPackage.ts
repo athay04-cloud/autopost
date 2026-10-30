@@ -101,20 +101,25 @@ async function scanGroupsFromOpenTabs() {
         func: () => {
           const groups = [];
           const links = document.querySelectorAll('a[href*="/groups/"]');
+          const ignore = [
+            'feed', 'discover', 'joins', 'create', 'notifications', 'beranda',
+            'jelajahi', 'categories', 'search', 'your_groups', 'member-requests',
+            'admin', 'settings', 'insights', 'events', 'members', 'media', 'files'
+          ];
+
           links.forEach((a) => {
             const href = a.getAttribute('href') || '';
-            const match = href.match(/\\/groups\\/([0-9]{8,25})/);
-            const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
-            const cleanName = rawText.split('\\n')[0].trim();
-
-            if (match && match[1] && cleanName.length > 2) {
-              const ignore = ['feed', 'discover', 'joins', 'create', 'notifications', 'beranda', 'jelajahi'];
-              if (!ignore.some(ig => cleanName.toLowerCase().includes(ig))) {
-                if (!groups.some(g => g.id === match[1])) {
+            const match = href.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+            if (match && match[1]) {
+              const idOrSlug = match[1].split('?')[0].split('/')[0];
+              if (!ignore.includes(idOrSlug.toLowerCase())) {
+                const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
+                const cleanName = rawText.split('\\n')[0].trim() || ('Grup FB ' + idOrSlug);
+                if (cleanName.length >= 2 && !groups.some((g) => g.id === idOrSlug)) {
                   groups.push({
-                    id: match[1],
+                    id: idOrSlug,
                     name: cleanName,
-                    url: 'https://www.facebook.com/groups/' + match[1],
+                    url: 'https://www.facebook.com/groups/' + idOrSlug,
                   });
                 }
               }
@@ -152,20 +157,26 @@ async function fetchGroupsFromNetwork() {
   ];
 
   const found = [];
+  const ignore = [
+    'feed', 'discover', 'joins', 'create', 'notifications', 'beranda',
+    'jelajahi', 'categories', 'search', 'your_groups', 'member-requests',
+    'admin', 'settings', 'insights', 'events', 'members', 'media', 'files'
+  ];
 
   for (const url of endpoints) {
     try {
       const res = await fetch(url, { credentials: "include" });
       const html = await res.text();
 
-      // Pola Regex 1: /groups/123456789/
-      const regexLink = /<a[^>]+href="[^"]*\\/groups\\/([0-9]{8,25})[^"]*"[^>]*>([^<]+)<\\/a>/g;
+      // Pola Regex 1: /groups/slug_or_id/
+      const regexLink = /<a[^>]+href="[^"]*\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})[^"]*"[^>]*>([^<]+)<\\/a>/g;
       let m;
       while ((m = regexLink.exec(html)) !== null) {
-        if (m[1] && m[2] && !found.some(g => g.id === m[1])) {
+        const idOrSlug = m[1].split('?')[0].split('/')[0];
+        if (idOrSlug && !ignore.includes(idOrSlug.toLowerCase())) {
           const name = m[2].trim();
-          if (name.length > 2 && !name.toLowerCase().includes('seemore')) {
-            found.push({ id: m[1], name, url: "https://www.facebook.com/groups/" + m[1] });
+          if (name.length > 2 && !found.some(g => g.id === idOrSlug)) {
+            found.push({ id: idOrSlug, name, url: "https://www.facebook.com/groups/" + idOrSlug });
           }
         }
       }
@@ -259,11 +270,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               firstComment: request.firstComment,
             }, (res) => {
               sendResponse({
-                success: res ? res.success : true,
+                success: !!(res && res.success),
                 postUrl: groupUrl,
+                error: res?.error,
+                message: res?.message,
               });
             });
-          }, 4000);
+          }, 4500);
         }
       });
     });
@@ -282,19 +295,28 @@ console.log("[Metus] Content script injected on Facebook tab.");
 function autoScanGroups() {
   const links = document.querySelectorAll('a[href*="/groups/"]');
   const found = [];
+  const ignore = [
+    'feed', 'discover', 'joins', 'create', 'notifications', 'beranda',
+    'jelajahi', 'categories', 'search', 'your_groups', 'member-requests',
+    'admin', 'settings', 'insights', 'events', 'members', 'media', 'files'
+  ];
+
   links.forEach((a) => {
     const href = a.getAttribute('href') || '';
-    const match = href.match(/\\/groups\\/([0-9]{8,25})/);
-    const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
-    const cleanName = rawText.split('\\n')[0].trim();
+    const match = href.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+    if (match && match[1]) {
+      const idOrSlug = match[1].split('?')[0].split('/')[0];
+      if (!ignore.includes(idOrSlug.toLowerCase())) {
+        const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
+        const cleanName = rawText.split('\\n')[0].trim() || ('Grup FB ' + idOrSlug);
 
-    if (match && match[1] && cleanName.length > 2) {
-      if (!found.some(g => g.id === match[1])) {
-        found.push({
-          id: match[1],
-          name: cleanName,
-          url: 'https://www.facebook.com/groups/' + match[1],
-        });
+        if (cleanName.length >= 2 && !found.some(g => g.id === idOrSlug)) {
+          found.push({
+            id: idOrSlug,
+            name: cleanName,
+            url: 'https://www.facebook.com/groups/' + idOrSlug,
+          });
+        }
       }
     }
   });
@@ -316,7 +338,7 @@ setTimeout(autoScanGroups, 3000);
 // Listener kirim postingan otomatis
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "SUBMIT_POST_DOM") {
-    // Cari trigger composer Facebook
+    // 1. Cari trigger composer Facebook
     const triggers = [
       '[aria-label="Tulis sesuatu..."]',
       '[aria-label="Tulis postingan publik..."]',
@@ -342,42 +364,114 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       });
     }
 
-    if (composerTrigger) composerTrigger.click();
+    if (!composerTrigger) {
+      sendResponse({
+        success: false,
+        error: "Kotak komposer Facebook tidak ditemukan. Pastikan akun Anda sudah bergabung di grup ini dan memiliki izin posting."
+      });
+      return true;
+    }
 
-    setTimeout(() => {
+    composerTrigger.click();
+
+    // 2. Tunggu editor Lexical dan modal dialog
+    let attempts = 0;
+    const maxAttempts = 15;
+    const checkEditor = setInterval(() => {
+      attempts++;
+      const dialog = document.querySelector('div[role="dialog"]') || document;
       const editor =
-        document.querySelector('[role="textbox"][contenteditable="true"]') ||
-        document.querySelector('div[data-lexical-editor="true"]') ||
-        document.querySelector('div[contenteditable="true"]');
+        dialog.querySelector('[role="textbox"][contenteditable="true"]') ||
+        dialog.querySelector('div[data-lexical-editor="true"]') ||
+        dialog.querySelector('div[contenteditable="true"]');
 
       if (editor) {
+        clearInterval(checkEditor);
         editor.focus();
-        document.execCommand("insertText", false, request.content);
+
+        // Multi-method injection untuk React Lexical State
         try {
-          editor.dispatchEvent(new InputEvent("input", { bubbles: true, data: request.content }));
+          const dt = new DataTransfer();
+          dt.setData("text/plain", request.content);
+          const pasteEvent = new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt,
+          });
+          editor.dispatchEvent(pasteEvent);
         } catch (e) {}
 
-        setTimeout(() => {
-          const postButton =
-            document.querySelector('[aria-label="Posting"]') ||
-            document.querySelector('[aria-label="Post"]') ||
-            document.querySelector('[aria-label="Kirim"]') ||
-            Array.from(document.querySelectorAll('div[role="button"]')).find(b => {
-              const text = (b.innerText || '').trim().toLowerCase();
-              return text === 'posting' || text === 'post' || text === 'kirim';
-            });
+        try {
+          const beforeInput = new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertText",
+            data: request.content,
+          });
+          editor.dispatchEvent(beforeInput);
+        } catch (e) {}
 
-          if (postButton && !postButton.hasAttribute("aria-disabled") && postButton.getAttribute("aria-disabled") !== "true") {
-            postButton.click();
-            sendResponse({ success: true, message: "Post berhasil dikirim ke grup Facebook!" });
-          } else {
-            sendResponse({ success: true, simulated: true, message: "Teks dimasukkan ke editor Facebook." });
+        try {
+          document.execCommand("insertText", false, request.content);
+        } catch (e) {}
+
+        try {
+          editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+        } catch (e) {}
+
+        // 3. Cari tombol posting di dialog
+        setTimeout(() => {
+          const labels = ['Posting', 'Post', 'Kirim', 'Publish'];
+          let postBtn = null;
+          for (const l of labels) {
+            const b = dialog.querySelector('[aria-label="' + l + '"]');
+            if (b) { postBtn = b; break; }
           }
+          if (!postBtn) {
+            const buttons = Array.from(dialog.querySelectorAll('div[role="button"]'));
+            postBtn = buttons.find(b => {
+              const t = (b.innerText || '').trim().toLowerCase();
+              return labels.some(l => t === l.toLowerCase());
+            });
+          }
+
+          if (!postBtn) {
+            sendResponse({
+              success: false,
+              error: "Tombol 'Posting' tidak ditemukan di dialog Facebook."
+            });
+            return;
+          }
+
+          const isDisabled =
+            postBtn.hasAttribute("disabled") ||
+            postBtn.getAttribute("aria-disabled") === "true";
+
+          if (isDisabled) {
+            editor.focus();
+            editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
+          }
+
+          postBtn.click();
+
+          setTimeout(() => {
+            const stillOpen = document.querySelector('div[role="dialog"]');
+            sendResponse({
+              success: true,
+              message: "Post berhasil dikirim ke grup!",
+              verified: !stillOpen
+            });
+          }, 2000);
         }, 2200);
-      } else {
-        sendResponse({ success: false, error: "Editor Facebook tidak ditemukan atau belum terbuka." });
+
+      } else if (attempts >= maxAttempts) {
+        clearInterval(checkEditor);
+        sendResponse({
+          success: false,
+          error: "Dialog komposer Facebook tidak terbuka atau terhalang aturan persetujuan grup."
+        });
       }
-    }, 2800);
+    }, 300);
 
     return true;
   }
@@ -426,7 +520,9 @@ window.addEventListener("message", (event) => {
         type: "METUS_POST_COMPLETED",
         groupId: event.data.groupId,
         resultId: event.data.resultId,
-        success: res ? res.success : true,
+        success: !!(res && res.success),
+        error: res?.error,
+        message: res?.message,
         postUrl: res?.postUrl || ("https://www.facebook.com/groups/" + event.data.groupId),
       }, "*");
     });

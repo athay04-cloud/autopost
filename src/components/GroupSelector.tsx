@@ -14,7 +14,10 @@ import {
   ChevronRight,
   ChevronDown,
   Sparkles,
+  ExternalLink,
+  PlusCircle,
 } from 'lucide-react';
+import { AddCustomGroupsModal } from './AddCustomGroupsModal';
 
 interface GroupSelectorProps {
   groups: FacebookGroup[];
@@ -24,6 +27,7 @@ interface GroupSelectorProps {
   onSelectAllVisible: (ids: string[]) => void;
   onDeselectAllVisible: (ids: string[]) => void;
   onApplyPreset: (preset: GroupPreset) => void;
+  onAddCustomGroups?: (newGroups: FacebookGroup[]) => void;
 }
 
 export const GroupSelector: React.FC<GroupSelectorProps> = ({
@@ -34,12 +38,14 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
   onSelectAllVisible,
   onDeselectAllVisible,
   onApplyPreset,
+  onAddCustomGroups,
 }) => {
   const [searchTerm, setSearchTerm] = React.useState('');
   const [activeTab, setActiveTab] = React.useState<'all' | 'selected' | 'admin'>('all');
   const [currentPage, setCurrentPage] = React.useState(1);
   const [pageSize, setPageSize] = React.useState(6);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const [isAddModalOpen, setIsAddModalOpen] = React.useState(false);
 
   // Compute counts
   const totalCount = groups.length;
@@ -114,11 +120,22 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
           </span>
         </div>
 
-        {/* Dropdown Preset: "Choose from list" */}
+        {/* Dropdown Preset & Add Real Group Action */}
         <div>
-          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">
-            Koleksi / Preset Tersimpan:
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Koleksi / Preset Tersimpan:
+            </label>
+            <button
+              type="button"
+              onClick={() => setIsAddModalOpen(true)}
+              className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 cursor-pointer bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-900/50"
+              title="Masukkan link atau ID grup Facebook asli Anda"
+            >
+              <PlusCircle className="w-3 h-3" />
+              <span>+ Tambah Grup Asli</span>
+            </button>
+          </div>
           <div className="relative">
             <select
               onChange={(e) => {
@@ -308,24 +325,38 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
                       </span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={(e) => handleCopyId(group.id, e)}
-                      className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                      title="Salin ID grup"
-                    >
-                      {copiedId === group.id ? (
-                        <>
-                          <Check className="w-2.5 h-2.5 text-emerald-500" />
-                          <span className="text-emerald-500">Tersalin</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-2.5 h-2.5" />
-                          <span>Salin ID</span>
-                        </>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={`https://www.facebook.com/groups/${group.id}?sorting_setting=CHRONOLOGICAL`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-[10px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5"
+                        title="Buka grup ini di Facebook"
+                      >
+                        <span>Buka FB</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+
+                      <button
+                        type="button"
+                        onClick={(e) => handleCopyId(group.id, e)}
+                        className="text-[10px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 flex items-center gap-1"
+                        title="Salin ID grup"
+                      >
+                        {copiedId === group.id ? (
+                          <>
+                            <Check className="w-2.5 h-2.5 text-emerald-500" />
+                            <span className="text-emerald-500">Tersalin</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-2.5 h-2.5" />
+                            <span>Salin ID</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -390,6 +421,17 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Modal Tambah Grup Asli */}
+      <AddCustomGroupsModal
+        isOpen={isAddModalOpen}
+        onClose={() => setIsAddModalOpen(false)}
+        onAddGroups={(newGroups) => {
+          if (onAddCustomGroups) {
+            onAddCustomGroups(newGroups);
+          }
+        }}
+      />
     </div>
   );
 };
