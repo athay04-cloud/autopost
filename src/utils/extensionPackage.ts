@@ -262,27 +262,258 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
         if (tabId === tab.id && info.status === "complete") {
           chrome.tabs.onUpdated.removeListener(listener);
-          // Tunggu DOM Facebook siap
-          setTimeout(() => {
-            chrome.tabs.sendMessage(tab.id, {
-              action: "SUBMIT_POST_DOM",
-              content: request.content,
-              firstComment: request.firstComment,
-            }, (res) => {
-              sendResponse({
-                success: !!(res && res.success),
-                postUrl: groupUrl,
-                error: res?.error,
-                message: res?.message,
+          // Tunggu 3.5 detik untuk inisialisasi React FB lalu jalankan injeksi postingan
+          setTimeout(async () => {
+            try {
+              const execResults = await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                func: executeFacebookPostAutomation,
+                args: [request.content, request.firstComment || ""]
               });
-            });
-          }, 4500);
+
+              const result = execResults?.[0]?.result || {
+                success: false,
+                error: "Skrip otomasi tidak menghasilkan output di tab Facebook."
+              };
+
+              sendResponse({
+                success: !!result.success,
+                postUrl: groupUrl,
+                error: result.error,
+                message: result.message
+              });
+            } catch (err) {
+              console.error("[Metus] executeScript failed:", err);
+              sendResponse({
+                success: false,
+                postUrl: groupUrl,
+                error: "Gagal menyuntikkan otomasi ke tab Facebook: " + (err.message || String(err))
+              });
+            }
+          }, 3500);
         }
       });
     });
     return true;
   }
 });
+
+// Fungsi Otomasi Komposer Facebook (Dieksekusi langsung di DOM Tab Grup Facebook)
+async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
+  console.log("[Metus Tab Automation] Memulai proses posting ke Facebook group...");
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  // 1. Scroll sedikit untuk trigger lazy-load Facebook
+  window.scrollBy(0, 200);
+  await sleep(1000);
+
+  // 2. Cari tombol pembuka komposer (Mendukung grup reguler, jual-beli, kost, dan diskusi)
+  const candidateKeywords = [
+    "mulai diskusi",
+    "start discussion",
+    "buat diskusi",
+    "tulis sesuatu",
+    "write something",
+    "buat postingan publik",
+    "create a public post",
+    "tulis postingan",
+    "apa yang anda jual",
+    "what are you selling"
+  ];
+
+  let composerTrigger = null;
+
+  const attributeSelectors = [
+    '[aria-label="Mulai Diskusi"]',
+    '[aria-label="Start Discussion"]',
+    '[aria-label="Tulis sesuatu..."]',
+    '[aria-label="Tulis sesuatu…"]',
+    '[aria-label="Write something..."]',
+    '[aria-label="Write something…"]',
+    '[aria-label="Buat postingan publik..."]',
+    '[aria-label="Tulis postingan publik..."]',
+    '[aria-label="Create a public post…"]',
+    '[aria-label="Create a public post..."]',
+    'div[role="feed"] div[role="button"][tabindex="0"]',
+    'div[role="main"] div[role="button"][tabindex="0"]'
+  ];
+
+  for (const sel of attributeSelectors) {
+    const el = document.querySelector(sel);
+    if (el && el.offsetParent !== null) {
+      composerTrigger = el;
+      break;
+    }
+  }
+
+  if (!composerTrigger) {
+    const allButtons = Array.from(document.querySelectorAll('span, div[role="button"]'));
+    composerTrigger = allButtons.find((el) => {
+      const text = (el.innerText || '').trim().toLowerCase();
+      return candidateKeywords.some((kw) => text.includes(kw));
+    });
+  }
+
+  if (!composerTrigger) {
+    return {
+      success: false,
+      error: "Kotak 'Mulai Diskusi' / 'Tulis sesuatu' tidak ditemukan di grup ini. Pastikan akun Anda sudah disetujui menjadi anggota grup."
+    };
+  }
+
+  // Scroll ke elemen dan klik
+  composerTrigger.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  await sleep(600);
+  composerTrigger.click();
+
+  // 3. Tunggu modal dialog dan editor Lexical muncul (maksimal 12 detik)
+  let editor = null;
+  let dialog = null;
+
+  for (let i = 0; i < 24; i++) {
+    await sleep(500);
+    dialog = document.querySelector('div[role="dialog"]') || document;
+
+    // Cek jika ada pilihan jenis postingan (Jual Barang vs Diskusi)
+    const discussionChoice = Array.from(dialog.querySelectorAll('div[role="button"], span')).find((el) => {
+      const t = (el.innerText || '').trim().toLowerCase();
+      return t === 'diskusi' || t === 'mulai diskusi' || t === 'buat diskusi' || t === 'discussion';
+    });
+    if (discussionChoice) {
+      discussionChoice.click();
+      await sleep(800);
+    }
+
+    editor =
+      dialog.querySelector('[role="textbox"][contenteditable="true"]') ||
+      dialog.querySelector('div[data-lexical-editor="true"]') ||
+      dialog.querySelector('div[contenteditable="true"]');
+
+    if (editor) break;
+  }
+
+  if (!editor) {
+    return {
+      success: false,
+      error: "Dialog komposer Facebook tidak terbuka atau terhalang kuesioner keanggotaan grup."
+    };
+  }
+
+  // 4. Fokus dan suntikkan teks ke editor Lexical
+  editor.focus();
+  editor.click();
+  await sleep(400);
+
+  // Injeksi teks via ClipboardEvent DataTransfer
+  try {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", contentToPost);
+    const pasteEvent = new ClipboardEvent("paste", {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dt,
+    });
+    editor.dispatchEvent(pasteEvent);
+  } catch (e) {}
+
+  // Injeksi via beforeinput
+  try {
+    const beforeInput = new InputEvent("beforeinput", {
+      bubbles: true,
+      cancelable: true,
+      inputType: "insertText",
+      data: contentToPost,
+    });
+    editor.dispatchEvent(beforeInput);
+  } catch (e) {}
+
+  // Fallback execCommand
+  try {
+    document.execCommand("insertText", false, contentToPost);
+  } catch (e) {}
+
+  // Event input
+  try {
+    editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
+  } catch (e) {}
+
+  await sleep(1500);
+
+  // 5. Cari tombol Posting di dalam dialog
+  const submitLabels = ["Posting", "Post", "Kirim", "Publish"];
+  let postButton = null;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    dialog = document.querySelector('div[role="dialog"]') || document;
+
+    for (const label of submitLabels) {
+      const btn = dialog.querySelector('[aria-label="' + label + '"]');
+      if (btn && btn.offsetParent !== null) {
+        postButton = btn;
+        break;
+      }
+    }
+
+    if (!postButton) {
+      const allButtons = Array.from(dialog.querySelectorAll('div[role="button"]'));
+      postButton = allButtons.find((b) => {
+        const text = (b.innerText || '').trim().toLowerCase();
+        return submitLabels.some((l) => text === l.toLowerCase());
+      });
+    }
+
+    if (postButton) {
+      const disabled =
+        postButton.hasAttribute("disabled") ||
+        postButton.getAttribute("aria-disabled") === "true";
+
+      if (!disabled) break;
+    }
+
+    editor.focus();
+    editor.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await sleep(600);
+  }
+
+  if (!postButton) {
+    return {
+      success: false,
+      error: "Tombol 'Posting' tidak ditemukan di dialog Facebook."
+    };
+  }
+
+  const isStillDisabled =
+    postButton.hasAttribute("disabled") ||
+    postButton.getAttribute("aria-disabled") === "true";
+
+  if (isStillDisabled) {
+    return {
+      success: false,
+      error: "Tombol 'Posting' tetap non-aktif. Facebook belum memvalidasi teks di grup ini."
+    };
+  }
+
+  // Klik tombol posting
+  postButton.click();
+  await sleep(3500);
+
+  // 6. Cek apakah dialog berhasil tertutup atau ada pesan menunggu persetujuan admin
+  const dialogStillOpen = document.querySelector('div[role="dialog"]');
+  if (dialogStillOpen) {
+    const dialogText = (dialogStillOpen.innerText || '').toLowerCase();
+    if (dialogText.includes("persetujuan") || dialogText.includes("pending") || dialogText.includes("admin")) {
+      return {
+        success: true,
+        message: "Postingan berhasil terkirim dan sedang menunggu persetujuan admin grup."
+      };
+    }
+  }
+
+  return {
+    success: true,
+    message: "Postingan berhasil dipublikasikan ke grup Facebook!"
+  };
+}
 `,
   },
   {

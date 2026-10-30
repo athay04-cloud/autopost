@@ -101,6 +101,9 @@ export default function App() {
     localStorage.setItem('metus_selected_group_ids', JSON.stringify(selectedGroupIds));
   }, [selectedGroupIds]);
 
+  // Map to await real extension posting results
+  const pendingPostResolvers = React.useRef<Map<string, (res: any) => void>>(new Map());
+
   // Listener sinkronisasi otomatis dari Extension Chrome (dashboard_bridge.js)
   React.useEffect(() => {
     const handleExtensionSync = (event: MessageEvent) => {
@@ -143,15 +146,24 @@ export default function App() {
 
           setGroups((prev) => {
             const existingIds = new Set(formatted.map((f) => f.id));
-            return [...formatted, ...prev.filter((p) => !existingIds.has(p.id))];
+            const merged = [...formatted, ...prev.filter((p) => !existingIds.has(p.id))];
+            localStorage.setItem('metus_saved_groups', JSON.stringify(merged));
+            return merged;
           });
           setSelectedGroupIds(formatted.map((f) => f.id));
           addLog('success', `Ekstensi Chrome berhasil menyinkronkan ${formatted.length} grup Facebook asli ke dashboard!`);
         }
       } else if (event.data && event.data.type === 'METUS_POST_COMPLETED') {
-        const { groupId, resultId, success, postUrl } = event.data;
+        const { groupId, resultId, success, postUrl, error, message } = event.data;
         const fallbackUrl = `https://www.facebook.com/groups/${groupId}?sorting_setting=CHRONOLOGICAL`;
         const confirmedUrl = postUrl || fallbackUrl;
+
+        // Resolve pending runner if awaiting
+        const resolver = pendingPostResolvers.current.get(resultId);
+        if (resolver) {
+          resolver(event.data);
+          pendingPostResolvers.current.delete(resultId);
+        }
 
         setResults((prev) =>
           prev.map((r) =>
@@ -159,19 +171,13 @@ export default function App() {
               ? {
                   ...r,
                   status: success ? 'success' : 'failed',
+                  errorMessage: success ? undefined : (error || 'Gagal menerbitkan postingan ke grup Facebook'),
                   postUrl: confirmedUrl,
-                  isRealPost: true,
+                  isRealPost: success,
                   timestamp: new Date().toLocaleTimeString(),
                 }
               : r
           )
-        );
-
-        addLog(
-          success ? 'success' : 'error',
-          success
-            ? `[Ekstensi Chrome] Postingan berhasil diterbitkan ke grup! Buka di FB: ${confirmedUrl}`
-            : `[Ekstensi Chrome] Gagal menerbitkan ke grup ${groupId}`
         );
       }
     };
@@ -555,53 +561,124 @@ export default function App() {
           );
           addLog('error', `[Thread #${workerId}] Gagal kirim ke "${group.name}": Grup melarang postingan anonim.`);
         } else {
-          // Direct URL to Facebook group discussion feed sorted chronologically (newest posts first)
           const realGroupUrl = `https://www.facebook.com/groups/${group.id}?sorting_setting=CHRONOLOGICAL`;
 
-          // If connected via extension, dispatch real automation to Chrome extension
           if (isFbConnected) {
-            try {
-              window.postMessage(
-                {
-                  type: 'METUS_DISPATCH_POST',
-                  groupId: group.id,
-                  content: rendered,
-                  firstComment: resolvedFirstComment,
-                  resultId: resultId,
-                },
-                '*'
-              );
-            } catch (err) {
-              console.warn('Dispatch to extension bridge:', err);
-            }
-          }
-
-          setResults((prev) =>
-            prev.map((r) =>
-              r.id === resultId
-                ? {
-                    ...r,
-                    status: 'success',
-                    postUrl: realGroupUrl,
-                    isRealPost: isFbConnected,
-                    timestamp: new Date().toLocaleTimeString(),
-                  }
-                : r
-            )
-          );
-
-          addLog(
-            'success',
-            isFbConnected
-              ? `[Thread #${workerId} · Ekstensi Terhubung] Berhasil menerbitkan postingan ke "${group.name}". Link grup: ${realGroupUrl}`
-              : `[Thread #${workerId} · Simulasi] Berhasil disiapkan untuk "${group.name}". Link grup: ${realGroupUrl}`
-          );
-
-          if (executionParams.commentAfterPosting && resolvedFirstComment) {
             addLog(
               'info',
-              `[Thread #${workerId}] Auto-comment (Up) terpasang di "${group.name}": "${resolvedFirstComment.slice(0, 35)}..."`
+              `[Thread #${workerId}] Mengirim perintah posting otomatis ke ekstensi Chrome untuk "${group.name}"...`
             );
+
+            // Await extension completion via promise with 40s timeout
+            const extensionResultPromise = new Promise<{
+              success: boolean;
+              error?: string;
+              message?: string;
+              postUrl?: string;
+            }>((resolve) => {
+              const timeout = setTimeout(() => {
+                pendingPostResolvers.current.delete(resultId);
+                resolve({
+                  success: false,
+                  error: 'Timeout: Ekstensi belum menyelesaikan postingan dalam 40 detik. Pastikan tab Facebook terbuka dan memiliki izin posting.',
+                });
+              }, 40000);
+
+              pendingPostResolvers.current.set(resultId, (res) => {
+                clearTimeout(timeout);
+                resolve(res);
+              });
+
+              try {
+                window.postMessage(
+                  {
+                    type: 'METUS_DISPATCH_POST',
+                    groupId: group.id,
+                    content: rendered,
+                    firstComment: resolvedFirstComment,
+                    resultId: resultId,
+                  },
+                  '*'
+                );
+              } catch (err) {
+                clearTimeout(timeout);
+                resolve({ success: false, error: 'Gagal dispatch postMessage: ' + String(err) });
+              }
+            });
+
+            const postResult = await extensionResultPromise;
+
+            if (postResult.success) {
+              setResults((prev) =>
+                prev.map((r) =>
+                  r.id === resultId
+                    ? {
+                        ...r,
+                        status: 'success',
+                        postUrl: postResult.postUrl || realGroupUrl,
+                        isRealPost: true,
+                        timestamp: new Date().toLocaleTimeString(),
+                      }
+                    : r
+                )
+              );
+              addLog(
+                'success',
+                `[Thread #${workerId} · Ekstensi Terverifikasi] Postingan berhasil diterbitkan ke "${group.name}"! Link grup: ${postResult.postUrl || realGroupUrl}`
+              );
+
+              if (executionParams.commentAfterPosting && resolvedFirstComment) {
+                addLog(
+                  'info',
+                  `[Thread #${workerId}] Auto-comment (Up) terpasang di "${group.name}": "${resolvedFirstComment.slice(0, 35)}..."`
+                );
+              }
+            } else {
+              setResults((prev) =>
+                prev.map((r) =>
+                  r.id === resultId
+                    ? {
+                        ...r,
+                        status: 'failed',
+                        errorMessage: postResult.error || 'Gagal menerbitkan postingan ke Facebook',
+                        postUrl: realGroupUrl,
+                        isRealPost: false,
+                        timestamp: new Date().toLocaleTimeString(),
+                      }
+                    : r
+                )
+              );
+              addLog(
+                'error',
+                `[Thread #${workerId} · Gagal FB] Grup "${group.name}": ${postResult.error || 'Ekstensi gagal menerbitkan kiriman.'}`
+              );
+            }
+          } else {
+            // Pure simulation mode
+            setResults((prev) =>
+              prev.map((r) =>
+                r.id === resultId
+                  ? {
+                      ...r,
+                      status: 'success',
+                      postUrl: realGroupUrl,
+                      isRealPost: false,
+                      timestamp: new Date().toLocaleTimeString(),
+                    }
+                  : r
+              )
+            );
+            addLog(
+              'success',
+              `[Thread #${workerId} · Simulasi] Berhasil disiapkan untuk "${group.name}". Link grup: ${realGroupUrl}`
+            );
+
+            if (executionParams.commentAfterPosting && resolvedFirstComment) {
+              addLog(
+                'info',
+                `[Thread #${workerId}] Auto-comment (Up) disimulasikan di "${group.name}": "${resolvedFirstComment.slice(0, 35)}..."`
+              );
+            }
           }
         }
       }
