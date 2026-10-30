@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.0.4',
-        description: 'Ekstensi jembatan otomatisasi posting Facebook Group dengan anti-ban delay, spintax, dan sinkronisasi dashboard.',
+        version: '1.0.5',
+        description: 'Ekstensi otomasi posting Facebook Group di latar belakang (Silent Background Mode) tanpa mencuri fokus layar / tab jumping.',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -294,30 +294,30 @@ async function processNextPostQueue() {
   }
 }
 
-// Menjalankan postingan pada satu tab Facebook yang didedikasikan
+// Menjalankan postingan pada background tab senyap (active: false - tanpa tab jumping / tanpa mengganggu layar)
 async function executeSingleFacebookGroupPost(request) {
   const groupUrl = "https://www.facebook.com/groups/" + request.groupId + "/?sorting_setting=CHRONOLOGICAL";
-  console.log("[Metus] Membuka tab grup Facebook:", groupUrl);
+  console.log("[Metus Silent Background] Membuka background tab senyap (active: false):", groupUrl);
 
-  // Buka tab sebagai tab aktif agar browser tidak men-throttle rendering DOM Facebook
-  const tab = await chrome.tabs.create({ url: groupUrl, active: true });
-
+  // active: false memastikan tab terbuka di latar belakang tanpa mencuri fokus atau memindahkan layar pengguna!
+  let tab = null;
   try {
-    // 1. Tunggu hingga tab Facebook benar-benar selesai loading (status complete & readyState)
+    tab = await chrome.tabs.create({ url: groupUrl, active: false });
+
+    // 1. Tunggu hingga tab Facebook di background selesai loading (status complete & readyState)
     const isLoaded = await waitForFacebookTabReady(tab.id, 25000);
     if (!isLoaded) {
-      try { chrome.tabs.remove(tab.id); } catch (e) {}
       return {
         success: false,
         postUrl: groupUrl,
-        error: "Gagal memuat halaman grup Facebook (timeout 25s). Pastikan koneksi stabil."
+        error: "Gagal memuat halaman grup Facebook di background (timeout 25s). Pastikan koneksi stabil."
       };
     }
 
     // 2. Beri waktu 3.5 detik agar React dan feed Facebook selesai mounting komponen
     await new Promise((r) => setTimeout(r, 3500));
 
-    // 3. Jalankan otomasi DOM posting langsung di dalam konteks tab Facebook
+    // 3. Jalankan otomasi DOM posting langsung di dalam konteks tab Facebook di background
     const execResults = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: executeFacebookPostAutomation,
@@ -329,13 +329,6 @@ async function executeSingleFacebookGroupPost(request) {
       error: "Skrip otomasi tidak mengembalikan respon dari tab Facebook."
     };
 
-    // 4. Jika postingan sukses diterbitkan, tunggu 3 detik agar network request FB selesai lalu tutup tab otomatis
-    if (result.success) {
-      setTimeout(() => {
-        try { chrome.tabs.remove(tab.id); } catch (e) {}
-      }, 3000);
-    }
-
     return {
       success: !!result.success,
       postUrl: groupUrl,
@@ -343,12 +336,20 @@ async function executeSingleFacebookGroupPost(request) {
       message: result.message
     };
   } catch (err) {
-    console.error("[Metus Background] Error saat mengeksekusi di tab:", err);
+    console.error("[Metus Background] Error saat mengeksekusi di background tab:", err);
     return {
       success: false,
       postUrl: groupUrl,
       error: "Gagal memproses otomasi grup: " + (err.message || String(err))
     };
+  } finally {
+    // PEMBERSIHAN OTOMATIS: Tab background SELALU ditutup otomatis (baik sukses maupun gagal)
+    // sehingga TIDAK ADA tab Facebook yang tertinggal atau menumpuk di browser Anda!
+    if (tab && tab.id) {
+      setTimeout(() => {
+        try { chrome.tabs.remove(tab.id); } catch (e) {}
+      }, 2500);
+    }
   }
 }
 
@@ -696,41 +697,49 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
 
   console.log("[Metus] Editor postingan grup ditemukan:", editor);
 
-  // 7. Fokus dan masukkan teks promosi ke dalam editor Facebook
+  // 7. Fokus dan masukkan teks promosi ke dalam editor Facebook (SEKALI SAJA, ANTI-DUPLIKASI)
   editor.focus();
   triggerRealisticClick(editor);
   await sleep(400);
 
-  // Set kursor seleksi di akhir
+  // Bersihkan teks atau seleksi lama jika ada
   try {
     const sel = window.getSelection();
+    sel.removeAllRanges();
     const range = document.createRange();
     range.selectNodeContents(editor);
-    range.collapse(false);
-    sel.removeAllRanges();
     sel.addRange(range);
   } catch (e) {}
 
-  // Multi-method injection untuk React Lexical State
+  // Metode 1 (Utama): execCommand insertText
+  let isInserted = false;
   try {
-    document.execCommand("insertText", false, contentToPost);
+    isInserted = document.execCommand("insertText", false, contentToPost);
   } catch (e) {}
 
-  try {
-    const dt = new DataTransfer();
-    dt.setData("text/plain", contentToPost);
-    editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
-  } catch (e) {}
+  // Cek apakah teks sudah berhasil masuk
+  let currentText = (editor.innerText || editor.textContent || "").trim();
 
-  try {
-    editor.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: contentToPost }));
-  } catch (e) {}
+  // Metode 2 (Fallback): DataTransfer ClipboardEvent paste HANYA jika metode 1 belum terisi
+  if (currentText.length === 0) {
+    try {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", contentToPost);
+      editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+    } catch (e) {}
+    currentText = (editor.innerText || editor.textContent || "").trim();
+  }
 
-  try {
-    editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: contentToPost }));
-  } catch (e) {}
+  // Metode 3 (Fallback): beforeinput & input event HANYA jika teks masih belum terisi
+  if (currentText.length === 0) {
+    try {
+      editor.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: contentToPost }));
+      editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: contentToPost }));
+    } catch (e) {}
+    currentText = (editor.innerText || editor.textContent || "").trim();
+  }
 
-  const currentText = (editor.innerText || editor.textContent || "").trim();
+  // Metode 4 (Fallback Terakhir): Pasang node Lexical langsung jika masih kosong
   if (currentText.length === 0) {
     const p = document.createElement("p");
     p.className = "xdj266r x11i5rnm xat24cr x1mh8g0r";
@@ -742,9 +751,9 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
     editor.appendChild(p);
   }
 
+  // Picu event input/change tunggal untuk mengaktifkan validasi submit button Facebook tanpa menambah teks ganda
   try {
-    editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: " ", code: "Space" }));
-    editor.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: " ", code: "Space" }));
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
     editor.dispatchEvent(new Event("change", { bubbles: true }));
   } catch (e) {}
 
@@ -820,11 +829,10 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
       if (!disabled) break;
     }
 
-    // Re-trigger editor agar Facebook Lexical merekonsiliasi teks
+    // Beri trigger input ringan tanpa menambah karakter apapun
     editor.focus();
     try {
-      document.execCommand("insertText", false, " ");
-      editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: " " }));
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
     } catch (e) {}
     await sleep(600);
   }
@@ -1121,25 +1129,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         clearInterval(checkEditor);
         editor.focus();
 
+        // Bersihkan seleksi lama jika ada
         try {
-          const dt = new DataTransfer();
-          dt.setData("text/plain", request.content);
-          editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          const range = document.createRange();
+          range.selectNodeContents(editor);
+          sel.addRange(range);
         } catch (e) {}
 
-        try {
-          editor.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: request.content }));
-        } catch (e) {}
-
+        // Metode 1 (Utama): execCommand insertText
         try {
           document.execCommand("insertText", false, request.content);
         } catch (e) {}
 
-        try {
-          editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: request.content }));
-        } catch (e) {}
+        let txtVal = (editor.innerText || editor.textContent || "").trim();
 
-        const txtVal = (editor.innerText || editor.textContent || "").trim();
+        // Metode 2: DataTransfer ClipboardEvent HANYA jika teks belum masuk
+        if (txtVal.length === 0) {
+          try {
+            const dt = new DataTransfer();
+            dt.setData("text/plain", request.content);
+            editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
+          } catch (e) {}
+          txtVal = (editor.innerText || editor.textContent || "").trim();
+        }
+
+        // Metode 3: beforeinput & input HANYA jika masih kosong
+        if (txtVal.length === 0) {
+          try {
+            editor.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: request.content }));
+            editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: request.content }));
+          } catch (e) {}
+          txtVal = (editor.innerText || editor.textContent || "").trim();
+        }
+
+        // Metode 4: Direct Lexical DOM Node HANYA jika masih kosong
         if (txtVal.length === 0) {
           const p = document.createElement("p");
           p.className = "xdj266r x11i5rnm xat24cr x1mh8g0r";
@@ -1151,9 +1176,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           editor.appendChild(p);
         }
 
+        // Picu event input/change tunggal untuk mengaktifkan validasi submit button
         try {
-          editor.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: " ", code: "Space" }));
-          editor.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: " ", code: "Space" }));
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
           editor.dispatchEvent(new Event("change", { bubbles: true }));
         } catch (e) {}
 
