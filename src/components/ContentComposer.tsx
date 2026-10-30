@@ -31,6 +31,8 @@ import {
   Calendar,
   AlertTriangle,
   RotateCcw,
+  ExternalLink,
+  Check,
 } from 'lucide-react';
 
 interface ContentComposerProps {
@@ -57,6 +59,7 @@ interface ContentComposerProps {
   logs: LogEntry[];
   onClearLogs: () => void;
   selectedGroupCount: number;
+  isFbConnected?: boolean;
 }
 
 export const ContentComposer: React.FC<ContentComposerProps> = ({
@@ -83,6 +86,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
   logs,
   onClearLogs,
   selectedGroupCount,
+  isFbConnected = false,
 }) => {
   const currentScenario =
     scenarios.find((s) => s.id === activeScenarioId) || scenarios[0];
@@ -90,6 +94,14 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
   const [showEmojiPicker, setShowEmojiPicker] = React.useState(false);
   const [logFilter, setLogFilter] = React.useState<'all' | 'error' | 'warn' | 'success'>('all');
   const [copiedLogs, setCopiedLogs] = React.useState(false);
+  const [copiedUrlId, setCopiedUrlId] = React.useState<string | null>(null);
+  const [copiedLogUrl, setCopiedLogUrl] = React.useState<string | null>(null);
+
+  const handleCopyPostUrl = (id: string, url: string) => {
+    navigator.clipboard.writeText(url);
+    setCopiedUrlId(id);
+    setTimeout(() => setCopiedUrlId(null), 2000);
+  };
 
   // Helper to insert text at textarea cursor
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -1003,9 +1015,18 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                     </td>
                     <td className="py-2 px-3">
                       {item.status === 'success' && (
-                        <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold font-sans">
-                          ✓ Sukses
-                        </span>
+                        <div className="flex flex-col gap-0.5">
+                          {item.isRealPost ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold font-sans">
+                              <Check className="w-3 h-3" />
+                              Terbit Nyata
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-sky-600 dark:text-sky-400 font-semibold font-sans">
+                              ✓ Simulasi
+                            </span>
+                          )}
+                        </div>
                       )}
                       {item.status === 'failed' && (
                         <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold font-sans">
@@ -1013,8 +1034,8 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                         </span>
                       )}
                       {item.status === 'running' && (
-                        <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400 font-medium font-sans">
-                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                        <span className="inline-flex items-center gap-1 text-amber-500 font-medium font-sans">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
                           Delay {item.delayRemaining ?? 0}s...
                         </span>
                       )}
@@ -1028,15 +1049,56 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                       {item.timestamp || '—'}
                     </td>
                     <td className="py-2 px-3 text-right font-sans">
-                      <button
-                        type="button"
-                        onClick={() => onPreviewPostResult(item)}
-                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline inline-flex items-center gap-1"
-                        title="Lihat simulasi postingan Facebook"
-                      >
-                        <Eye className="w-3 h-3" />
-                        <span>Pratinjau</span>
-                      </button>
+                      <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
+                        {item.status === 'success' && (
+                          <>
+                            <a
+                              href={item.postUrl || `https://www.facebook.com/groups/${item.groupId}?sorting_setting=CHRONOLOGICAL`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-2 py-1 text-[11px] font-semibold text-blue-600 hover:text-white bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-600 dark:hover:bg-blue-600 border border-blue-200 dark:border-blue-800 rounded-md transition-all inline-flex items-center gap-1"
+                              title="Buka langsung postingan/grup di Facebook (Terbaru)"
+                            >
+                              <span>Buka di FB</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleCopyPostUrl(
+                                  item.id,
+                                  item.postUrl || `https://www.facebook.com/groups/${item.groupId}?sorting_setting=CHRONOLOGICAL`
+                                )
+                              }
+                              className="px-2 py-1 text-[11px] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 rounded-md transition-colors inline-flex items-center gap-1"
+                              title="Salin tautan grup Facebook ini"
+                            >
+                              {copiedUrlId === item.id ? (
+                                <span className="text-emerald-500 font-medium flex items-center gap-0.5">
+                                  <Check className="w-2.5 h-2.5" />
+                                  Tersalin!
+                                </span>
+                              ) : (
+                                <>
+                                  <Copy className="w-2.5 h-2.5" />
+                                  <span>Salin</span>
+                                </>
+                              )}
+                            </button>
+                          </>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => onPreviewPostResult(item)}
+                          className="px-2 py-1 text-[11px] text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md inline-flex items-center gap-1"
+                          title="Lihat simulasi postingan Facebook"
+                        >
+                          <Eye className="w-2.5 h-2.5" />
+                          <span>Preview</span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1056,6 +1118,11 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
             <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded">
               {logs.length} entri
             </span>
+            {isFbConnected && (
+              <span className="text-[10px] bg-emerald-950/80 border border-emerald-800/80 text-emerald-300 px-2 py-0.5 rounded flex items-center gap-1">
+                <Check className="w-2.5 h-2.5" /> Sesi Chrome Nyata
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -1102,35 +1169,82 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
         </div>
 
         {/* Log Lines Container */}
-        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 h-36 overflow-y-auto text-[11px] space-y-1">
+        <div className="bg-slate-950 p-3 rounded-xl border border-slate-800/80 h-44 overflow-y-auto text-[11px] space-y-1.5">
           {filteredLogs.length === 0 ? (
             <div className="text-slate-600 py-4 text-center">
               Tidak ada log aktivitas saat ini.
             </div>
           ) : (
-            filteredLogs.map((log) => (
-              <div key={log.id} className="leading-relaxed flex items-start gap-2">
-                <span className="text-slate-500 shrink-0 select-none">
-                  [{log.timestamp}]
-                </span>
-                <span
-                  className={`font-semibold shrink-0 select-none ${
-                    log.level === 'error'
-                      ? 'text-rose-400'
-                      : log.level === 'warn'
-                      ? 'text-amber-400'
-                      : log.level === 'success'
-                      ? 'text-emerald-400'
-                      : 'text-blue-400'
-                  }`}
-                >
-                  [{log.level.toUpperCase()}]
-                </span>
-                <span className="text-slate-300 break-words flex-1">
-                  {log.message}
-                </span>
-              </div>
-            ))
+            filteredLogs.map((log) => {
+              // Parse URL for interactive click and copy
+              const urlRegex = /(https?:\/\/[^\s]+)/g;
+              const hasUrl = urlRegex.test(log.message);
+
+              return (
+                <div key={log.id} className="leading-relaxed flex items-start gap-2">
+                  <span className="text-slate-500 shrink-0 select-none">
+                    [{log.timestamp}]
+                  </span>
+                  <span
+                    className={`font-semibold shrink-0 select-none ${
+                      log.level === 'error'
+                        ? 'text-rose-400'
+                        : log.level === 'warn'
+                        ? 'text-amber-400'
+                        : log.level === 'success'
+                        ? 'text-emerald-400'
+                        : 'text-blue-400'
+                    }`}
+                  >
+                    [{log.level.toUpperCase()}]
+                  </span>
+                  <span className="text-slate-300 break-words flex-1">
+                    {!hasUrl ? (
+                      log.message
+                    ) : (
+                      log.message.split(urlRegex).map((part, pIdx) => {
+                        if (part.startsWith('http://') || part.startsWith('https://')) {
+                          return (
+                            <span
+                              key={pIdx}
+                              className="inline-flex items-center gap-1 mx-1 bg-slate-800/90 text-sky-300 px-1.5 py-0.5 rounded border border-slate-700/80 font-mono text-[10.5px]"
+                            >
+                              <a
+                                href={part}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="underline hover:text-white flex items-center gap-0.5"
+                                title="Buka tautan ini di tab baru"
+                              >
+                                <span>{part}</span>
+                                <ExternalLink className="w-2.5 h-2.5" />
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(part);
+                                  setCopiedLogUrl(part);
+                                  setTimeout(() => setCopiedLogUrl(null), 2000);
+                                }}
+                                className="text-slate-400 hover:text-white p-0.5 rounded transition-colors"
+                                title="Salin URL ini"
+                              >
+                                {copiedLogUrl === part ? (
+                                  <Check className="w-2.5 h-2.5 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-2.5 h-2.5" />
+                                )}
+                              </button>
+                            </span>
+                          );
+                        }
+                        return <span key={pIdx}>{part}</span>;
+                      })
+                    )}
+                  </span>
+                </div>
+              );
+            })
           )}
         </div>
       </div>

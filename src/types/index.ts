@@ -79,6 +79,7 @@ export interface PostResultItem {
   delayRemaining?: number;
   errorMessage?: string;
   anonymous?: boolean;
+  isRealPost?: boolean;
 }
 
 export interface LogEntry {

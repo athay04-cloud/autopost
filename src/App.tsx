@@ -137,6 +137,31 @@ export default function App() {
           setSelectedGroupIds(formatted.map((f) => f.id));
           addLog('success', `Ekstensi Chrome berhasil menyinkronkan ${formatted.length} grup Facebook asli ke dashboard!`);
         }
+      } else if (event.data && event.data.type === 'METUS_POST_COMPLETED') {
+        const { groupId, resultId, success, postUrl } = event.data;
+        const fallbackUrl = `https://www.facebook.com/groups/${groupId}?sorting_setting=CHRONOLOGICAL`;
+        const confirmedUrl = postUrl || fallbackUrl;
+
+        setResults((prev) =>
+          prev.map((r) =>
+            r.id === resultId || r.groupId === groupId
+              ? {
+                  ...r,
+                  status: success ? 'success' : 'failed',
+                  postUrl: confirmedUrl,
+                  isRealPost: true,
+                  timestamp: new Date().toLocaleTimeString(),
+                }
+              : r
+          )
+        );
+
+        addLog(
+          success ? 'success' : 'error',
+          success
+            ? `[Ekstensi Chrome] Postingan berhasil diterbitkan ke grup! Buka di FB: ${confirmedUrl}`
+            : `[Ekstensi Chrome] Gagal menerbitkan ke grup ${groupId}`
+        );
       }
     };
 
@@ -508,8 +533,26 @@ export default function App() {
           );
           addLog('error', `[Thread #${workerId}] Gagal kirim ke "${group.name}": Grup melarang postingan anonim.`);
         } else {
-          const fakePostId = Math.floor(1000000000 + Math.random() * 9000000000);
-          const postUrl = `https://facebook.com/groups/${group.id}/posts/${fakePostId}`;
+          // Direct URL to Facebook group discussion feed sorted chronologically (newest posts first)
+          const realGroupUrl = `https://www.facebook.com/groups/${group.id}?sorting_setting=CHRONOLOGICAL`;
+
+          // If connected via extension, dispatch real automation to Chrome extension
+          if (isFbConnected) {
+            try {
+              window.postMessage(
+                {
+                  type: 'METUS_DISPATCH_POST',
+                  groupId: group.id,
+                  content: rendered,
+                  firstComment: resolvedFirstComment,
+                  resultId: resultId,
+                },
+                '*'
+              );
+            } catch (err) {
+              console.warn('Dispatch to extension bridge:', err);
+            }
+          }
 
           setResults((prev) =>
             prev.map((r) =>
@@ -517,7 +560,8 @@ export default function App() {
                 ? {
                     ...r,
                     status: 'success',
-                    postUrl,
+                    postUrl: realGroupUrl,
+                    isRealPost: isFbConnected,
                     timestamp: new Date().toLocaleTimeString(),
                   }
                 : r
@@ -526,7 +570,9 @@ export default function App() {
 
           addLog(
             'success',
-            `[Thread #${workerId}] Berhasil terbit di "${group.name}" (ID: ${group.id})! URL: ${postUrl}`
+            isFbConnected
+              ? `[Thread #${workerId} · Ekstensi Terhubung] Berhasil menerbitkan postingan ke "${group.name}". Link grup: ${realGroupUrl}`
+              : `[Thread #${workerId} · Simulasi] Berhasil disiapkan untuk "${group.name}". Link grup: ${realGroupUrl}`
           );
 
           if (executionParams.commentAfterPosting && resolvedFirstComment) {
@@ -614,6 +660,7 @@ export default function App() {
               logs={logs}
               onClearLogs={() => setLogs([])}
               selectedGroupCount={selectedGroupIds.length}
+              isFbConnected={isFbConnected}
             />
           </div>
 

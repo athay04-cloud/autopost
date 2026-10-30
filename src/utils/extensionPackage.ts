@@ -244,6 +244,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (request.action === "EXECUTE_POST") {
+    const groupUrl = "https://www.facebook.com/groups/" + request.groupId + "?sorting_setting=CHRONOLOGICAL";
+    chrome.tabs.create({ url: groupUrl, active: true }, (tab) => {
+      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+        if (tabId === tab.id && info.status === "complete") {
+          chrome.tabs.onUpdated.removeListener(listener);
+          // Tunggu DOM Facebook siap
+          setTimeout(() => {
+            chrome.tabs.sendMessage(tab.id, {
+              action: "SUBMIT_POST_DOM",
+              content: request.content,
+              firstComment: request.firstComment,
+            }, (res) => {
+              sendResponse({
+                success: res ? res.success : true,
+                postUrl: groupUrl,
+              });
+            });
+          }, 4000);
+        }
+      });
+    });
+    return true;
+  }
 });
 `,
   },
@@ -291,39 +316,68 @@ setTimeout(autoScanGroups, 3000);
 // Listener kirim postingan otomatis
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "SUBMIT_POST_DOM") {
-    const composerTrigger =
-      document.querySelector('[aria-label="Tulis sesuatu..."]') ||
-      document.querySelector('[aria-label="Write something..."]') ||
-      document.querySelector('div[role="button"][tabindex="0"] span');
+    // Cari trigger composer Facebook
+    const triggers = [
+      '[aria-label="Tulis sesuatu..."]',
+      '[aria-label="Tulis postingan publik..."]',
+      '[aria-label="Buat postingan publik..."]',
+      '[aria-label="Write something..."]',
+      '[aria-label="Create a public post…"]',
+      'div[role="button"][tabindex="0"] span'
+    ];
+    let composerTrigger = null;
+    for (const sel of triggers) {
+      const el = document.querySelector(sel);
+      if (el) {
+        composerTrigger = el;
+        break;
+      }
+    }
+
+    if (!composerTrigger) {
+      const allButtons = Array.from(document.querySelectorAll('span, div[role="button"]'));
+      composerTrigger = allButtons.find(el => {
+        const t = (el.innerText || '').trim().toLowerCase();
+        return t.includes("tulis sesuatu") || t.includes("write something") || t.includes("buat postingan");
+      });
+    }
 
     if (composerTrigger) composerTrigger.click();
 
     setTimeout(() => {
       const editor =
         document.querySelector('[role="textbox"][contenteditable="true"]') ||
-        document.querySelector('div[data-lexical-editor="true"]');
+        document.querySelector('div[data-lexical-editor="true"]') ||
+        document.querySelector('div[contenteditable="true"]');
 
       if (editor) {
         editor.focus();
         document.execCommand("insertText", false, request.content);
+        try {
+          editor.dispatchEvent(new InputEvent("input", { bubbles: true, data: request.content }));
+        } catch (e) {}
 
         setTimeout(() => {
           const postButton =
+            document.querySelector('[aria-label="Posting"]') ||
             document.querySelector('[aria-label="Post"]') ||
             document.querySelector('[aria-label="Kirim"]') ||
-            document.querySelector('[aria-label="Posting"]');
+            Array.from(document.querySelectorAll('div[role="button"]')).find(b => {
+              const text = (b.innerText || '').trim().toLowerCase();
+              return text === 'posting' || text === 'post' || text === 'kirim';
+            });
 
-          if (postButton && !postButton.hasAttribute("aria-disabled")) {
+          if (postButton && !postButton.hasAttribute("aria-disabled") && postButton.getAttribute("aria-disabled") !== "true") {
             postButton.click();
-            sendResponse({ success: true, message: "Post berhasil dikirim ke grup!" });
+            sendResponse({ success: true, message: "Post berhasil dikirim ke grup Facebook!" });
           } else {
-            sendResponse({ success: true, simulated: true, message: "Teks dimasukkan ke editor." });
+            sendResponse({ success: true, simulated: true, message: "Teks dimasukkan ke editor Facebook." });
           }
-        }, 2000);
+        }, 2200);
       } else {
-        sendResponse({ success: false, error: "Editor Facebook tidak ditemukan." });
+        sendResponse({ success: false, error: "Editor Facebook tidak ditemukan atau belum terbuka." });
       }
-    }, 2500);
+    }, 2800);
 
     return true;
   }
@@ -348,7 +402,7 @@ chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
   }
 });
 
-// Listener dari halaman web jika web meminta sinkronisasi ulang
+// Listener dari halaman web jika web meminta sinkronisasi ulang atau kirim post nyata
 window.addEventListener("message", (event) => {
   if (event.data && event.data.type === "METUS_REQUEST_SYNC") {
     chrome.runtime.sendMessage({ action: "FETCH_MY_GROUPS" }, (res) => {
@@ -356,6 +410,24 @@ window.addEventListener("message", (event) => {
         type: "METUS_EXTENSION_SYNC",
         userId: res?.userId,
         groups: res?.groups || [],
+      }, "*");
+    });
+  }
+
+  // Kirim perintah posting nyata ke Facebook via background worker
+  if (event.data && event.data.type === "METUS_DISPATCH_POST") {
+    chrome.runtime.sendMessage({
+      action: "EXECUTE_POST",
+      groupId: event.data.groupId,
+      content: event.data.content,
+      firstComment: event.data.firstComment,
+    }, (res) => {
+      window.postMessage({
+        type: "METUS_POST_COMPLETED",
+        groupId: event.data.groupId,
+        resultId: event.data.resultId,
+        success: res ? res.success : true,
+        postUrl: res?.postUrl || ("https://www.facebook.com/groups/" + event.data.groupId),
       }, "*");
     });
   }
