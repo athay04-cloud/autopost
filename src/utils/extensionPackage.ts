@@ -411,40 +411,19 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
   console.log("[Metus Tab Automation v1.0.4] Memulai proses posting ke Facebook group...");
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-  // Helper untuk memicu event klik realistis yang dikenali oleh React 18 Event Delegation
+  // Helper untuk memicu event klik realistis yang dikenali oleh React 18 Event Delegation (Anti-double posting guard)
   function triggerRealisticClick(el) {
-    if (!el) return;
+    if (!el || el._clicked || window.__metus_has_submitted) return;
+    el._clicked = true;
     try {
       el.scrollIntoView({ behavior: "instant", block: "center" });
       if (typeof el.focus === "function") el.focus();
     } catch (e) {}
 
-    const rect = el.getBoundingClientRect();
-    const clientX = rect.left + rect.width / 2;
-    const clientY = rect.top + rect.height / 2;
-    const opts = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: clientX,
-      clientY: clientY,
-      buttons: 1
-    };
-
-    el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    const opts = { bubbles: true, cancelable: true, view: window };
     el.dispatchEvent(new MouseEvent("mousedown", opts));
-    el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     el.dispatchEvent(new MouseEvent("click", opts));
-
-    // Panggil click asli
-    if (typeof el.click === "function") el.click();
-
-    // Jika elemen berada di dalam role="button" atau tabindex="0", klik juga pembungkusnya
-    const parentBtn = el.closest('div[role="button"], div[tabindex="0"], button');
-    if (parentBtn && parentBtn !== el) {
-      if (typeof parentBtn.click === "function") parentBtn.click();
-    }
   }
 
   // 1. Tangani jika ada modal pop-up "Aturan Grup" atau "Persetujuan" sebelum posting
@@ -892,6 +871,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
   }
 
   console.log("[Metus] Mengklik tombol Posting:", postButton);
+  window.__metus_has_submitted = true;
   triggerRealisticClick(postButton);
   await sleep(3500);
 
@@ -978,34 +958,17 @@ setTimeout(autoScanGroups, 3000);
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "SUBMIT_POST_DOM") {
     function triggerRealisticClick(el) {
-      if (!el) return;
+      if (!el || el._clicked || window.__metus_has_submitted) return;
+      el._clicked = true;
       try {
         el.scrollIntoView({ behavior: "instant", block: "center" });
         if (typeof el.focus === "function") el.focus();
       } catch (e) {}
 
-      const rect = el.getBoundingClientRect();
-      const clientX = rect.left + rect.width / 2;
-      const clientY = rect.top + rect.height / 2;
-      const opts = {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        clientX: clientX,
-        clientY: clientY,
-        buttons: 1
-      };
-      el.dispatchEvent(new PointerEvent("pointerdown", opts));
+      const opts = { bubbles: true, cancelable: true, view: window };
       el.dispatchEvent(new MouseEvent("mousedown", opts));
-      el.dispatchEvent(new PointerEvent("pointerup", opts));
       el.dispatchEvent(new MouseEvent("mouseup", opts));
       el.dispatchEvent(new MouseEvent("click", opts));
-      if (typeof el.click === "function") el.click();
-
-      const parentBtn = el.closest('div[role="button"], div[tabindex="0"], button');
-      if (parentBtn && parentBtn !== el) {
-        if (typeof parentBtn.click === "function") parentBtn.click();
-      }
     }
 
     function isExcludedElement(el) {
@@ -1258,14 +1221,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return;
           }
 
+          window.__metus_has_submitted = true;
           const btnLabel = (postBtn.getAttribute("aria-label") || postBtn.innerText || "").toLowerCase();
           if (btnLabel.includes("berikutnya") || btnLabel.includes("next")) {
             triggerRealisticClick(postBtn);
-            setTimeout(() => {
-              const finalDialog = document.querySelector('div[role="dialog"]') || document;
-              const finalBtn = finalDialog.querySelector('[aria-label="Posting"], [aria-label="Post"], [aria-label="Kirim"]') || postBtn;
-              triggerRealisticClick(finalBtn);
-            }, 1200);
           } else {
             triggerRealisticClick(postBtn);
           }
