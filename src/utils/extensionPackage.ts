@@ -301,38 +301,33 @@ async function processNextPostQueue() {
 // 4. Jendela langsung dihancurkan secara otomatis (chrome.windows.remove) setelah posting selesai/gagal!
 async function executeSingleFacebookGroupPost(request) {
   const groupUrl = "https://www.facebook.com/groups/" + request.groupId + "/?sorting_setting=CHRONOLOGICAL";
-  console.log("[Metus Headless Engine] Meluncurkan background stealth window untuk:", groupUrl);
+  console.log("[Metus Headless Engine] Meluncurkan offscreen popup window untuk:", groupUrl);
 
   let win = null;
   let tabId = null;
 
   try {
-    // Buat jendela popup tersembunyi / minimized di luar layar
-    try {
-      win = await chrome.windows.create({
-        url: groupUrl,
-        focused: false,
-        state: "minimized",
-        type: "popup",
-        left: -25000,
-        top: -25000,
-        width: 1024,
-        height: 768
-      });
-      if (win && win.tabs && win.tabs.length > 0) {
-        tabId = win.tabs[0].id;
-      } else if (win && win.id) {
-        const winTabs = await chrome.tabs.query({ windowId: win.id });
-        if (winTabs && winTabs.length > 0) tabId = winTabs[0].id;
-      }
-    } catch (winErr) {
-      console.warn("[Metus Headless] Gagal membuat minimized popup, mencoba fallback ke background tab:", winErr);
+    // Buat jendela popup terpisah (type: popup) di luar layar (left: 10000)
+    // Ini memastikan TIDAK ADA tab baru yang muncul di jendela/tab bar utama Anda!
+    win = await chrome.windows.create({
+      url: groupUrl,
+      focused: false,
+      type: "popup",
+      left: 10000,
+      top: 10000,
+      width: 1024,
+      height: 768
+    });
+
+    if (win && win.tabs && win.tabs.length > 0) {
+      tabId = win.tabs[0].id;
+    } else if (win && win.id) {
+      const winTabs = await chrome.tabs.query({ windowId: win.id });
+      if (winTabs && winTabs.length > 0) tabId = winTabs[0].id;
     }
 
-    // Fallback jika mode window popup tidak diizinkan di sistem tertentu
     if (!tabId) {
-      const fbTab = await chrome.tabs.create({ url: groupUrl, active: false });
-      tabId = fbTab.id;
+      throw new Error("Gagal menginisialisasi jendela popup off-screen.");
     }
 
     // 1. Tunggu hingga tab Facebook di background stealth selesai loading (status complete & readyState)
@@ -374,15 +369,10 @@ async function executeSingleFacebookGroupPost(request) {
       error: "Gagal memproses otomasi grup: " + (err.message || String(err))
     };
   } finally {
-    // PEMBERSIHAN OTOMATIS: Jendela stealth SELALU ditutup otomatis (baik sukses maupun gagal)
-    // sehingga TIDAK ADA jendela/tab Facebook yang tertinggal atau menumpuk di komputer Anda!
+    // PEMBERSIHAN OTOMATIS: Jendela stealth SELALU ditutup otomatis
     if (win && win.id) {
       setTimeout(() => {
         try { chrome.windows.remove(win.id); } catch (e) {}
-      }, 2500);
-    } else if (tabId) {
-      setTimeout(() => {
-        try { chrome.tabs.remove(tabId); } catch (e) {}
       }, 2500);
     }
   }
