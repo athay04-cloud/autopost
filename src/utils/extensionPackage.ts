@@ -307,14 +307,14 @@ async function executeSingleFacebookGroupPost(request) {
   let tabId = null;
 
   try {
-    // Buat jendela popup terpisah (type: popup) di luar layar (left: 10000)
-    // Ini memastikan TIDAK ADA tab baru yang muncul di jendela/tab bar utama Anda!
+    // Buat jendela popup terpisah (type: popup) dengan state minimized (tanpa tab baru di jendela utama dan tanpa error bounds)
     win = await chrome.windows.create({
       url: groupUrl,
       focused: false,
       type: "popup",
-      left: 10000,
-      top: 10000,
+      state: "minimized",
+      left: 50,
+      top: 50,
       width: 1024,
       height: 768
     });
@@ -408,6 +408,10 @@ function waitForFacebookTabReady(tabId, maxWaitMs = 25000) {
 
 // Fungsi Otomasi Komposer Facebook (Dieksekusi langsung di DOM Tab Grup Facebook)
 async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
+  if (window.__metus_has_submitted) {
+    console.warn("[Metus] Post already submitted in this session. Aborting duplicate.");
+    return { success: false, error: "Postingan sudah dikirim sebelumnya pada sesi ini (mencegah duplikasi)." };
+  }
   console.log("[Metus Tab Automation v1.0.4] Memulai proses posting ke Facebook group...");
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
