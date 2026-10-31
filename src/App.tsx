@@ -103,11 +103,18 @@ export default function App() {
 
   // Map to await real extension posting results
   const pendingPostResolvers = React.useRef<Map<string, (res: any) => void>>(new Map());
+  const lastSyncTimeRef = React.useRef<number>(0);
 
   // Listener sinkronisasi otomatis dari Extension Chrome (dashboard_bridge.js)
   React.useEffect(() => {
     const handleExtensionSync = (event: MessageEvent) => {
       if (event.data && event.data.type === 'METUS_EXTENSION_SYNC') {
+        const now = Date.now();
+        if (now - lastSyncTimeRef.current < 3000) {
+          return;
+        }
+        lastSyncTimeRef.current = now;
+
         const { userId, groups: syncedGroups } = event.data;
         if (userId) {
           setIsFbConnected(true);
@@ -150,7 +157,7 @@ export default function App() {
             localStorage.setItem('metus_saved_groups', JSON.stringify(merged));
             return merged;
           });
-          setSelectedGroupIds(formatted.map((f) => f.id));
+          setSelectedGroupIds((prev) => (prev.length > 0 ? prev : formatted.map((f) => f.id)));
           addLog('success', `Ekstensi Chrome berhasil menyinkronkan ${formatted.length} grup Facebook asli ke dashboard!`);
         }
       } else if (event.data && event.data.type === 'METUS_POST_COMPLETED') {
