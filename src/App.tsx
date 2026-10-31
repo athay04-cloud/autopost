@@ -3,12 +3,16 @@ import { Header } from './components/Header';
 import { ContentComposer } from './components/ContentComposer';
 import { GroupSelector } from './components/GroupSelector';
 import { UpgradePlanModal } from './components/UpgradePlanModal';
+import { AuthModal } from './components/AuthModal';
 import { PostPreviewModal } from './components/PostPreviewModal';
 import { SpintaxModal } from './components/SpintaxModal';
 import { SavePresetModal } from './components/SavePresetModal';
 import { ImportExportModal } from './components/ImportExportModal';
 import { AccountConnectionModal } from './components/AccountConnectionModal';
 import { CustomExtensionBuilderModal } from './components/CustomExtensionBuilderModal';
+import { SaaSLandingPage } from './components/SaaSLandingPage';
+import { SecretAdminPortal } from './components/SecretAdminPortal';
+import { AuthUser, getSavedAuthSession, saveAuthSession } from './services/paymentAuthService';
 import {
   FacebookGroup,
   FacebookIdentity,
@@ -57,6 +61,38 @@ export default function App() {
   });
   const [isAccountModalOpen, setIsAccountModalOpen] = React.useState(false);
   const [isCustomBuilderOpen, setIsCustomBuilderOpen] = React.useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = React.useState(false);
+  const [isSecretAdminOpen, setIsSecretAdminOpen] = React.useState(false);
+  const [showLandingPage, setShowLandingPage] = React.useState<boolean>(true);
+  const [currentUser, setCurrentUser] = React.useState<AuthUser | null>(() => {
+    return getSavedAuthSession().user;
+  });
+
+  // Stealth Secret Admin Triggers: Keyboard (Ctrl+Shift+A / Alt+Shift+A) & URL Hash (#secret-admin)
+  React.useEffect(() => {
+    const checkUrlTrigger = () => {
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (hash === '#secret-admin' || hash === '#admin-vault' || search.includes('vault=admin')) {
+        setIsSecretAdminOpen(true);
+      }
+    };
+    checkUrlTrigger();
+    window.addEventListener('hashchange', checkUrlTrigger);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey || e.altKey) && e.shiftKey && e.key.toLowerCase() === 'a') {
+        e.preventDefault();
+        setIsSecretAdminOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('hashchange', checkUrlTrigger);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   // Facebook Groups & Presets
   const [groups, setGroups] = React.useState<FacebookGroup[]>(() => {
@@ -713,6 +749,42 @@ export default function App() {
     addLog('warn', 'Menghentikan thread posting...');
   };
 
+  if (showLandingPage) {
+    return (
+      <>
+        <SaaSLandingPage
+          onEnterDashboard={() => setShowLandingPage(false)}
+          onOpenSecretAdmin={() => setIsSecretAdminOpen(true)}
+          onUpgradeCompleted={(orderId, gateway) => {
+            const upgraded: AuthUser = currentUser
+              ? { ...currentUser, role: 'PREMIUM', plan: 'PREMIUM', planActivatedAt: new Date().toISOString() }
+              : {
+                  id: 'usr_demo_01',
+                  fullName: 'Budi Santoso (PRO)',
+                  email: 'demo@metus.id',
+                  role: 'PREMIUM',
+                  plan: 'PREMIUM',
+                  planActivatedAt: new Date().toISOString(),
+                  createdAt: new Date().toISOString(),
+                };
+            setCurrentUser(upgraded);
+            saveAuthSession('jwt_hybrid_verified', upgraded, true);
+            addLog(
+              'success',
+              `[Hybrid Payment PAID] Order ${orderId} via ${gateway.toUpperCase()} terverifikasi! Akun di-upgrade ke PRO.`
+            );
+          }}
+        />
+        <SecretAdminPortal
+          isOpen={isSecretAdminOpen}
+          onClose={() => setIsSecretAdminOpen(false)}
+          currentUser={currentUser}
+          onSyncCurrentUser={(updated) => setCurrentUser(updated)}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col transition-colors selection:bg-blue-600 selection:text-white">
       {/* 1. Header Bar */}
@@ -728,6 +800,10 @@ export default function App() {
         onOpenUpgradeModal={() => setIsUpgradeModalOpen(true)}
         onOpenConnectModal={() => setIsAccountModalOpen(true)}
         onOpenCustomBuilder={() => setIsCustomBuilderOpen(true)}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onOpenLandingPage={() => setShowLandingPage(true)}
+        onOpenSecretAdmin={() => setIsSecretAdminOpen(true)}
+        currentUser={currentUser}
         isFbConnected={isFbConnected}
         connectedFbName={connectedFbName}
         isPosting={isPosting}
@@ -786,10 +862,35 @@ export default function App() {
         </div>
       </main>
 
-      {/* Upgrade Plan Modal */}
+      {/* Upgrade Plan & QRIS DANA Bisnis Modal */}
       <UpgradePlanModal
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
+        currentUser={currentUser}
+        onOpenAuthModal={() => setIsAuthModalOpen(true)}
+        onUpgradeSuccess={(updatedUser, tx) => {
+          setCurrentUser(updatedUser);
+          addLog(
+            'success',
+            `[DANA QRIS PAID] Invoice ${tx.orderId} lunas! Akun ${updatedUser.email} otomatis di-upgrade ke paket ${updatedUser.plan}.`
+          );
+        }}
+      />
+
+      {/* Authentication Modal (Login & Register) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        currentUser={currentUser}
+        onAuthSuccess={(user) => {
+          setCurrentUser(user);
+          addLog('success', `[Auth JWT] Berhasil masuk sebagai ${user.fullName} (${user.email}) · Paket: ${user.plan}`);
+        }}
+        onLogout={() => {
+          setCurrentUser(null);
+          addLog('info', '[Auth JWT] Sesi pengguna telah diakhiri (Logout).');
+        }}
+        onOpenUpgrade={() => setIsUpgradeModalOpen(true)}
       />
 
       {/* Simulated Facebook Post Preview Modal */}
@@ -846,6 +947,14 @@ export default function App() {
       <CustomExtensionBuilderModal
         isOpen={isCustomBuilderOpen}
         onClose={() => setIsCustomBuilderOpen(false)}
+      />
+
+      {/* Laman Admin Rahasia (Stealth Vault) */}
+      <SecretAdminPortal
+        isOpen={isSecretAdminOpen}
+        onClose={() => setIsSecretAdminOpen(false)}
+        currentUser={currentUser}
+        onSyncCurrentUser={(updated) => setCurrentUser(updated)}
       />
     </div>
   );

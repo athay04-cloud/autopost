@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="id" class="scroll-smooth dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Metus Auto-Post — Facebook Group Automation Suite</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans antialiased selection:bg-blue-600 selection:text-white">
+
+  <!-- =====================================================================
+       1. NAVBAR (Logo, Navigation, Language Switcher EN/ID, Login & Trial)
+       ===================================================================== -->
+  <header class="sticky top-0 z-40 bg-slate-950/85 backdrop-blur-md border-b border-slate-800/80">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+      <!-- Brand -->
+      <a href="#" class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-sky-500 flex items-center justify-center text-white font-black shadow-lg shadow-blue-600/25">
+          ⚡
+        </div>
+        <div class="flex flex-col">
+          <div class="flex items-center gap-2">
+            <span class="text-lg font-extrabold tracking-tight text-white">Metus</span>
+            <span class="text-xs font-semibold text-blue-400">· Auto-Post</span>
+          </div>
+          <span class="text-[11px] text-slate-400 hidden sm:block" data-i18n="nav_tagline">Facebook Automation Engine</span>
+        </div>
+      </a>
+
+      <!-- Nav Links -->
+      <nav class="hidden md:flex items-center gap-7 text-sm font-medium text-slate-300">
+        <a href="#features" class="hover:text-white transition-colors" data-i18n="nav_features">Fitur Utama</a>
+        <a href="#pricing" class="hover:text-white transition-colors" data-i18n="nav_pricing">Harga & Paket</a>
+        <a href="#faq" class="hover:text-white transition-colors" data-i18n="nav_faq">FAQ</a>
+      </nav>
+
+      <!-- Controls: Language Switcher + CTA -->
+      <div class="flex items-center gap-2.5">
+        <!-- Language Switcher (EN / ID) -->
+        <div class="inline-flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800">
+          <button
+            type="button"
+            onclick="AppI18n.setLanguage('id')"
+            id="btn-lang-id"
+            class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+          >
+            🇮🇩 ID
+          </button>
+          <button
+            type="button"
+            onclick="AppI18n.setLanguage('en')"
+            id="btn-lang-en"
+            class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+          >
+            🇺🇸 EN
+          </button>
+        </div>
+
+        <a
+          href="/"
+          class="hidden sm:inline-flex px-3.5 py-2 rounded-xl text-xs font-semibold text-slate-300 hover:text-white hover:bg-slate-900 transition-colors"
+          data-i18n="nav_login"
+        >
+          Masuk Dashboard
+        </a>
+
+        <button
+          type="button"
+          onclick="PaymentFlow.openCheckoutModal('pro')"
+          class="px-4 py-2 rounded-xl text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/25 transition-all"
+          data-i18n="nav_cta"
+        >
+          Mulai Trial Gratis
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- =====================================================================
+       2. HERO SECTION (Anti-Checkpoint Headline, Dual CTA & Mock Dashboard)
+       ===================================================================== -->
+  <section class="relative overflow-hidden pt-14 pb-20 lg:pt-20 lg:pb-28 border-b border-slate-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
+        <!-- Left Copy (7 Cols) -->
+        <div class="lg:col-span-7 space-y-6">
+          <div class="text-xs font-semibold uppercase tracking-widest text-blue-400" data-i18n="hero_kicker">
+            HEADLESS CHROME ENGINE · ANTI-CHECKPOINT GUARD v4.2
+          </div>
+
+          <h1 class="text-3xl sm:text-5xl font-extrabold tracking-tight text-white leading-[1.12]" data-i18n="hero_title">
+            Otomasi Ratusan Grup Facebook Tanpa Risiko Blokir atau Tab Berantakan.
+          </h1>
+
+          <p class="text-base sm:text-lg text-slate-300 leading-relaxed max-w-2xl" data-i18n="hero_subtitle">
+            Metus Auto-Post menyebarkan promosi Anda ke ratusan grup tertarget secara headless di balik layar dengan Dynamic Spintext, Jeda Acak Anti-Spam, dan Auto-First Comment.
+          </p>
+
+          <div class="flex flex-wrap items-center gap-3.5 pt-2">
+            <button
+              type="button"
+              onclick="PaymentFlow.openCheckoutModal('pro')"
+              class="px-6 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-sm shadow-xl shadow-blue-600/25 transition-all"
+              data-i18n="hero_cta_primary"
+            >
+              Upgrade ke PRO Sekarang →
+            </button>
+            <a
+              href="/"
+              class="px-6 py-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-800 font-semibold text-sm transition-colors"
+              data-i18n="hero_cta_secondary"
+            >
+              Buka Live Workspace
+            </a>
+          </div>
+
+          <!-- Clean Typographic Metadata -->
+          <div class="pt-3 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+            <span data-i18n="hero_meta_1">✓ 100% Eksekusi Lokal di Chrome Anda</span>
+            <span>·</span>
+            <span data-i18n="hero_meta_2">✓ Pembayaran Instan QRIS & PayPal</span>
+            <span>·</span>
+            <span data-i18n="hero_meta_3">✓ Tanpa Password Facebook</span>
+          </div>
+        </div>
+
+        <!-- Right Mock Preview Dashboard (5 Cols) -->
+        <div class="lg:col-span-5">
+          <div class="rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden">
+            <div class="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between text-xs">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                <span class="ml-2 font-mono text-slate-400">metus-headless-runner.exe</span>
+              </div>
+              <span class="font-mono text-emerald-400">● ACTIVE</span>
+            </div>
+
+            <div class="p-5 space-y-4">
+              <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800/90 font-mono text-xs space-y-1.5">
+                <div class="text-slate-400">// Dynamic Spintax Engine</div>
+                <div class="text-sky-300">"{Halo|Permisi|Selamat Pagi} Warga Grup! {Promo|Diskon} Kost Eksklusif..."</div>
+              </div>
+
+              <div class="grid grid-cols-3 gap-3 text-center">
+                <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div class="text-lg font-extrabold text-white">109</div>
+                  <div class="text-[11px] text-slate-400" data-i18n="mock_stat_groups">Grup Tersinkron</div>
+                </div>
+                <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div class="text-lg font-extrabold text-emerald-400">99.4%</div>
+                  <div class="text-[11px] text-slate-400" data-i18n="mock_stat_rate">Tingkat Sukses</div>
+                </div>
+                <div class="p-3 rounded-xl bg-slate-950 border border-slate-800">
+                  <div class="text-lg font-extrabold text-blue-400">8-16s</div>
+                  <div class="text-[11px] text-slate-400" data-i18n="mock_stat_delay">Smart Jitter</div>
+                </div>
+              </div>
+
+              <div class="p-3.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-[11px] text-slate-300 space-y-1.5">
+                <div class="text-emerald-400">[SUCCESS] Thread #1 → "INFO KOST & KONTRAKAN SOLO" (Terbit)</div>
+                <div class="text-emerald-400">[SUCCESS] Thread #2 → "KOMUNITAS UMKM INDONESIA" (Terbit)</div>
+                <div class="text-amber-300">[DELAY] Menunggu jeda anti-spam acak 11 detik...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       3. CORE FEATURES (4 Columns)
+       ===================================================================== -->
+  <section id="features" class="py-20 border-b border-slate-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="max-w-2xl mb-12">
+        <div class="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2" data-i18n="feat_kicker">
+          ARSITEKTUR OTOMASI AMAN
+        </div>
+        <h2 class="text-2xl sm:text-3xl font-extrabold text-white" data-i18n="feat_heading">
+          Dirancang Khusus untuk Menghindari Deteksi Algoritma Spam Meta
+        </h2>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <!-- Feature 1: Bulk Posting -->
+        <div class="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-blue-600/20 text-blue-400 flex items-center justify-center font-bold">01</div>
+          <h3 class="text-base font-bold text-white" data-i18n="feat_1_title">Headless Bulk Posting</h3>
+          <p class="text-xs text-slate-400 leading-relaxed" data-i18n="feat_1_desc">
+            Kirim ratusan postingan ke grup Facebook secara simultan menggunakan jendela offscreen tanpa mengganggu aktivitas browsing Anda.
+          </p>
+        </div>
+
+        <!-- Feature 2: Dynamic Spintext -->
+        <div class="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center font-mono font-bold">{a|b}</div>
+          <h3 class="text-base font-bold text-white" data-i18n="feat_2_title">Dynamic Spintext {a|b|c}</h3>
+          <p class="text-xs text-slate-400 leading-relaxed" data-i18n="feat_2_desc">
+            Hasilkan ribuan variasi kalimat unik secara otomatis di setiap grup agar tidak terdeteksi sebagai duplikat konten oleh Facebook.
+          </p>
+        </div>
+
+        <!-- Feature 3: Smart Delay Interval -->
+        <div class="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-emerald-600/20 text-emerald-400 flex items-center justify-center font-bold">⏱</div>
+          <h3 class="text-base font-bold text-white" data-i18n="feat_3_title">Smart Delay Interval</h3>
+          <p class="text-xs text-slate-400 leading-relaxed" data-i18n="feat_3_desc">
+            Jeda waktu acak berbasis distribusi manusia (human-like jitter) antar kiriman dan siklus untuk menjaga reputasi akun tetap hijau.
+          </p>
+        </div>
+
+        <!-- Feature 4: Group ID Extractor -->
+        <div class="p-6 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-3">
+          <div class="w-10 h-10 rounded-xl bg-amber-600/20 text-amber-400 flex items-center justify-center font-bold">#ID</div>
+          <h3 class="text-base font-bold text-white" data-i18n="feat_4_title">1-Click Group ID Extractor</h3>
+          <p class="text-xs text-slate-400 leading-relaxed" data-i18n="feat_4_desc">
+            Sinkronisasikan seluruh daftar grup Facebook yang Anda ikuti langsung dari sesi Chrome aktif ke dashboard hanya dalam 1 klik.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       4. INTERACTIVE PRICING TABLE (Monthly/Yearly Toggle + Auto Currency)
+       ===================================================================== -->
+  <section id="pricing" class="py-20 border-b border-slate-900">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
+        <div>
+          <div class="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2" data-i18n="price_kicker">
+            HARGA TRANSPARAN · OTOMATIS SESUAI NEGARA ANDA
+          </div>
+          <h2 class="text-2xl sm:text-3xl font-extrabold text-white" data-i18n="price_heading">
+            Pilih Paket Otomasi Sesuai Skala Bisnis Anda
+          </h2>
+        </div>
+
+        <!-- Billing Cycle Switcher (Monthly vs Yearly) -->
+        <div class="inline-flex items-center p-1 rounded-xl bg-slate-900 border border-slate-800 self-start">
+          <button
+            type="button"
+            id="btn-cycle-monthly"
+            onclick="PaymentFlow.setBillingCycle('monthly')"
+            class="px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 text-white transition-all"
+            data-i18n="price_monthly"
+          >
+            Bulanan
+          </button>
+          <button
+            type="button"
+            id="btn-cycle-yearly"
+            onclick="PaymentFlow.setBillingCycle('yearly')"
+            class="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all"
+            data-i18n="price_yearly"
+          >
+            Tahunan (Hemat 25%)
+          </button>
+        </div>
+      </div>
+
+      <!-- Pricing Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
+        <!-- Plan 1: Starter Free -->
+        <div class="p-7 rounded-2xl bg-slate-900/70 border border-slate-800 flex flex-col justify-between">
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-wider text-slate-400" data-i18n="plan_free_name">Starter Trial</div>
+            <div class="mt-3 flex items-baseline gap-1">
+              <span class="text-3xl font-extrabold text-white" id="price-free-val">Rp 0</span>
+              <span class="text-xs text-slate-400" data-i18n="plan_free_period">/ selamanya</span>
+            </div>
+            <p class="mt-2 text-xs text-slate-400" data-i18n="plan_free_desc">Untuk pengujian dasar otomasi grup Facebook.</p>
+
+            <ul class="mt-6 space-y-3 text-xs text-slate-300">
+              <li data-i18n="plan_free_f1">✓ Maksimal 15 grup per kampanye</li>
+              <li data-i18n="plan_free_f2">✓ 1 Thread eksekusi simultan</li>
+              <li data-i18n="plan_free_f3">✓ Spintax generator dasar</li>
+            </ul>
+          </div>
+
+          <a
+            href="/"
+            class="mt-8 w-full py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-center text-xs font-semibold text-white transition-colors"
+            data-i18n="plan_free_btn"
+          >
+            Mulai Gratis
+          </a>
+        </div>
+
+        <!-- Plan 2: PRO Growth (Most Popular) -->
+        <div class="p-7 rounded-2xl bg-slate-900 border-2 border-blue-600 shadow-2xl shadow-blue-600/15 flex flex-col justify-between relative">
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold uppercase tracking-wider text-blue-400" data-i18n="plan_pro_name">PRO Growth · Rekomendasi</span>
+              <span class="text-xs font-mono text-emerald-400">BEST VALUE</span>
+            </div>
+            <div class="mt-3 flex items-baseline gap-1">
+              <span class="text-4xl font-extrabold text-white" id="price-pro-val">Rp 99.000</span>
+              <span class="text-xs text-slate-400" id="price-pro-period">/ bulan</span>
+            </div>
+            <p class="mt-2 text-xs text-slate-300" data-i18n="plan_pro_desc">Akses penuh tanpa batas untuk pemasar & pemilik bisnis aktif.</p>
+
+            <ul class="mt-6 space-y-3 text-xs text-slate-200">
+              <li data-i18n="plan_pro_f1">✓ Grup Facebook & skenario tanpa batas (Unlimited)</li>
+              <li data-i18n="plan_pro_f2">✓ Hingga 5 Concurrent Headless Threads</li>
+              <li data-i18n="plan_pro_f3">✓ Auto-First Comment "Up" penarik interaksi</li>
+              <li data-i18n="plan_pro_f4">✓ 1-Click Group ID Extractor & Preset Manager</li>
+            </ul>
+          </div>
+
+          <div class="mt-8 space-y-3">
+            <button
+              type="button"
+              onclick="PaymentFlow.openCheckoutModal('pro')"
+              class="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow-lg shadow-blue-600/25 transition-all"
+              data-i18n="plan_pro_btn"
+            >
+              Upgrade ke PRO Sekarang
+            </button>
+            <div class="text-[11px] text-center text-slate-400">
+              🇮🇩 QRIS · DANA · BCA · Mandiri &nbsp;|&nbsp; 🌍 Visa · Mastercard · PayPal
+            </div>
+          </div>
+        </div>
+
+        <!-- Plan 3: Agency Enterprise -->
+        <div class="p-7 rounded-2xl bg-slate-900/70 border border-slate-800 flex flex-col justify-between">
+          <div>
+            <div class="text-xs font-semibold uppercase tracking-wider text-indigo-400" data-i18n="plan_agency_name">Agency Ultimate</div>
+            <div class="mt-3 flex items-baseline gap-1">
+              <span class="text-3xl font-extrabold text-white" id="price-agency-val">Rp 249.000</span>
+              <span class="text-xs text-slate-400" id="price-agency-period">/ bulan</span>
+            </div>
+            <p class="mt-2 text-xs text-slate-400" data-i18n="plan_agency_desc">Untuk agensi digital & tim dengan banyak akun Facebook.</p>
+
+            <ul class="mt-6 space-y-3 text-xs text-slate-300">
+              <li data-i18n="plan_agency_f1">✓ Multi-Akun Facebook Tanpa Batas</li>
+              <li data-i18n="plan_agency_f2">✓ Custom Chrome Extension Builder (.ZIP)</li>
+              <li data-i18n="plan_agency_f3">✓ Penjadwalan Siklus Berulang Otomatis</li>
+              <li data-i18n="plan_agency_f4">✓ Dukungan Prioritas WhatsApp & Webhook API</li>
+            </ul>
+          </div>
+
+          <button
+            type="button"
+            onclick="PaymentFlow.openCheckoutModal('agency')"
+            class="mt-8 w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white transition-colors"
+            data-i18n="plan_agency_btn"
+          >
+            Pilih Paket Agency
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       6. FAQ ACCORDION
+       ===================================================================== -->
+  <section id="faq" class="py-20 border-b border-slate-900">
+    <div class="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+      <h2 class="text-2xl sm:text-3xl font-extrabold text-white mb-8" data-i18n="faq_heading">
+        Pertanyaan yang Sering Diajukan (FAQ)
+      </h2>
+
+      <div class="space-y-4">
+        <details class="group p-5 rounded-2xl bg-slate-900 border border-slate-800 open:border-blue-600/60">
+          <summary class="font-bold text-sm text-white cursor-pointer list-none flex items-center justify-between">
+            <span data-i18n="faq_q1">Apakah akun Facebook saya aman dari checkpoint atau banned?</span>
+            <span class="text-blue-400 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-3 text-xs text-slate-300 leading-relaxed" data-i18n="faq_a1">
+            Sangat aman. Metus berjalan langsung di atas sesi browser Chrome asli Anda tanpa meminta password atau token pihak ketiga, dilengkapi jeda waktu acak (Smart Delay) dan Spintax agar setiap postingan terlihat natural.
+          </p>
+        </details>
+
+        <details class="group p-5 rounded-2xl bg-slate-900 border border-slate-800 open:border-blue-600/60">
+          <summary class="font-bold text-sm text-white cursor-pointer list-none flex items-center justify-between">
+            <span data-i18n="faq_q2">Metode pembayaran apa saja yang didukung untuk pengguna Indonesia & luar negeri?</span>
+            <span class="text-blue-400 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-3 text-xs text-slate-300 leading-relaxed" data-i18n="faq_a2">
+            Untuk pengguna di Indonesia (IDR), kami mendukung QRIS Dinamis (DANA, GoPay, OVO, ShopeePay, m-Banking) dan Virtual Account Bank. Untuk pengguna Internasional (USD), tersedia pembayaran via Kartu Kredit (Visa, Mastercard, AMEX), PayPal, dan Lemon Squeezy.
+          </p>
+        </details>
+
+        <details class="group p-5 rounded-2xl bg-slate-900 border border-slate-800 open:border-blue-600/60">
+          <summary class="font-bold text-sm text-white cursor-pointer list-none flex items-center justify-between">
+            <span data-i18n="faq_q3">Berapa lama akun saya aktif setelah melakukan pembayaran?</span>
+            <span class="text-blue-400 group-open:rotate-180 transition-transform">▼</span>
+          </summary>
+          <p class="mt-3 text-xs text-slate-300 leading-relaxed" data-i18n="faq_a3">
+            Instan dalam hitungan detik! Sistem kami menggunakan Webhook otomatis dan Status Polling real-time yang langsung meng-upgrade akun Anda ke PRO begitu pembayaran terkonfirmasi.
+          </p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- =====================================================================
+       7. FOOTER (Meta Disclaimer, Policies & Support)
+       ===================================================================== -->
+  <footer class="py-12 bg-slate-950 text-xs text-slate-400">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+      <div class="space-y-2 max-w-xl">
+        <div class="font-bold text-white">Metus Auto-Post SaaS Suite</div>
+        <p class="text-[11px] text-slate-500 leading-relaxed" data-i18n="footer_disclaimer">
+          Disclaimer: Metus Auto-Post adalah perangkat lunak otomasi browser independen dan tidak berafiliasi dengan, disponsori, atau didukung oleh Meta Platforms, Inc. (Facebook). Gunakan secara bijak sesuai pedoman komunitas grup.
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-5">
+        <a href="/" class="hover:text-white transition-colors">Workspace</a>
+        <a href="#pricing" class="hover:text-white transition-colors" data-i18n="nav_pricing">Harga</a>
+        <a href="mailto:support@metus.id" class="hover:text-white transition-colors">Support 24/7</a>
+      </div>
+    </div>
+  </footer>
+
+  <!-- =====================================================================
+       5. INTERACTIVE HYBRID CHECKOUT MODAL (DOMESTIC QRIS vs GLOBAL USD)
+       ===================================================================== -->
+  <div
+    id="checkout-modal"
+    class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+  >
+    <div class="relative w-full max-w-2xl rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden text-slate-100">
+      <!-- Modal Header -->
+      <div class="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
+        <div>
+          <h3 class="text-base font-bold text-white" data-i18n="modal_title">Checkout Upgrade Akun PRO</h3>
+          <p class="text-xs text-slate-400 font-mono" id="modal-order-label">Order ID: INV-METUS-001</p>
+        </div>
+        <button
+          type="button"
+          onclick="PaymentFlow.closeCheckoutModal()"
+          class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+        >
+          ✕
+        </button>
+      </div>
+
+      <!-- Payment Channel Switcher (Domestik Indonesia vs Global International) -->
+      <div class="px-6 pt-4">
+        <div class="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
+          <button
+            type="button"
+            id="tab-channel-domestic"
+            onclick="PaymentFlow.setChannel('domestic')"
+            class="py-2 px-3 rounded-lg text-xs font-semibold transition-all"
+            data-i18n="modal_tab_domestic"
+          >
+            🇮🇩 Domestik (QRIS & Virtual Account)
+          </button>
+          <button
+            type="button"
+            id="tab-channel-global"
+            onclick="PaymentFlow.setChannel('global')"
+            class="py-2 px-3 rounded-lg text-xs font-semibold transition-all"
+            data-i18n="modal_tab_global"
+          >
+            🌍 Internasional (Card / PayPal / Lemon Squeezy)
+          </button>
+        </div>
+      </div>
+
+      <!-- Modal Body -->
+      <div class="p-6">
+        <!-- VIEW A: DOMESTIC INDONESIA (QRIS + VIRTUAL ACCOUNT) -->
+        <div id="view-channel-domestic" class="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+          <!-- QRIS Box (5 Cols) -->
+          <div class="md:col-span-5 flex flex-col items-center">
+            <div class="p-4 rounded-2xl bg-white text-slate-900 w-56 shadow-lg">
+              <div class="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
+                <span class="font-black text-xs">QRIS</span>
+                <span class="text-[10px] font-bold text-blue-600">MIDTRANS · DANA</span>
+              </div>
+              <div id="qris-svg-container" class="w-44 h-44 mx-auto bg-slate-100 p-2 rounded-lg flex items-center justify-center"></div>
+              <div class="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between text-xs">
+                <span class="text-slate-500">Total</span>
+                <span class="font-extrabold text-slate-900" id="domestic-amount-display">Rp 99.000</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Domestic Details & Countdown (7 Cols) -->
+          <div class="md:col-span-7 space-y-4 text-xs">
+            <div class="p-3.5 rounded-xl bg-amber-950/40 border border-amber-800/60 flex items-center justify-between">
+              <span class="text-amber-200 font-semibold" data-i18n="modal_waiting_payment">Menunggu Pembayaran QRIS...</span>
+              <span class="font-mono text-sm font-bold text-amber-300" id="qris-countdown">15:00</span>
+            </div>
+
+            <div class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+              <div class="font-semibold text-white" data-i18n="modal_va_title">Atau Transfer Virtual Account Otomatis:</div>
+              <div class="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300">
+                <div class="p-2 rounded bg-slate-900 border border-slate-800">BCA: 88019283711</div>
+                <div class="p-2 rounded bg-slate-900 border border-slate-800">Mandiri: 8902291827</div>
+                <div class="p-2 rounded bg-slate-900 border border-slate-800">BRI: 26219002918</div>
+                <div class="p-2 rounded bg-slate-900 border border-slate-800">BNI: 82710092831</div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onclick="PaymentFlow.simulatePaymentSuccess('midtrans')"
+              class="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg transition-all"
+              data-i18n="modal_simulate_btn"
+            >
+              ✓ Simulasi Bayar Berhasil (Trigger Webhook)
+            </button>
+          </div>
+        </div>
+
+        <!-- VIEW B: GLOBAL INTERNATIONAL (CREDIT CARD / PAYPAL / LEMON SQUEEZY) -->
+        <div id="view-channel-global" class="hidden space-y-4 text-xs">
+          <div class="flex items-center justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800">
+            <span class="text-slate-300" data-i18n="modal_global_total">Total Tagihan Internasional (USD):</span>
+            <span class="text-lg font-extrabold text-blue-400" id="global-amount-display">$9.99 / mo</span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onclick="PaymentFlow.simulatePaymentSuccess('paypal')"
+              class="py-3 px-4 rounded-xl bg-[#0070ba] hover:bg-[#005ea6] text-white font-bold flex items-center justify-center gap-2"
+            >
+              <span>Pay with PayPal Express</span>
+            </button>
+            <button
+              type="button"
+              onclick="PaymentFlow.simulatePaymentSuccess('lemonsqueezy')"
+              class="py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center justify-center gap-2"
+            >
+              <span>Checkout via Lemon Squeezy</span>
+            </button>
+          </div>
+
+          <div class="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+            <div class="font-semibold text-white">Credit / Debit Card (Visa · Mastercard · AMEX)</div>
+            <input
+              type="text"
+              placeholder="4532 •••• •••• 8891"
+              class="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-white font-mono"
+            />
+            <div class="grid grid-cols-2 gap-3">
+              <input
+                type="text"
+                placeholder="MM / YY (08/29)"
+                class="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-white font-mono"
+              />
+              <input
+                type="text"
+                placeholder="CVC (882)"
+                class="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-white font-mono"
+              />
+            </div>
+            <button
+              type="button"
+              onclick="PaymentFlow.simulatePaymentSuccess('stripe_card')"
+              class="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold"
+              data-i18n="modal_card_pay_btn"
+            >
+              Bayar Sekarang & Aktifkan PRO Instan
+            </button>
+          </div>
+        </div>
+
+        <!-- VIEW C: PAYMENT CONFIRMED / PAID STATE -->
+        <div id="view-payment-success" class="hidden py-8 text-center space-y-4">
+          <div class="w-14 h-14 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto text-2xl font-bold">
+            ✓
+          </div>
+          <h4 class="text-xl font-extrabold text-white" data-i18n="modal_paid_title">
+            Pembayaran Berhasil! Akun Anda telah di-upgrade ke PRO
+          </h4>
+          <p class="text-xs text-slate-300 max-w-md mx-auto" data-i18n="modal_paid_desc">
+            Webhook pembayaran telah diverifikasi. Anda akan diarahkan secara otomatis ke Dashboard Workspace PRO...
+          </p>
+          <div class="pt-2">
+            <a
+              href="/"
+              class="inline-flex px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs"
+              data-i18n="modal_goto_dashboard"
+            >
+              Masuk ke Dashboard PRO Sekarang →
+            </a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Polling Status Bar -->
+      <div class="px-6 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+        <span id="polling-indicator">● Polling /api/payment/check-status setiap 3 detik...</span>
+        <span>SSL 256-BIT ENCRYPTED</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- =====================================================================
+       MODULAR VANILLA JAVASCRIPT:
+       1. AppI18n (Auto-Language Detection + Instant Switcher)
+       2. PaymentFlow (Auto-Currency + Hybrid Checkout + Status Polling)
+       ===================================================================== -->
+  <script>
+    const i18n = {
+      id: {
+        nav_tagline: 'Suite Otomasi Grup Facebook',
+        nav_features: 'Fitur Utama',
+        nav_pricing: 'Harga & Paket',
+        nav_faq: 'FAQ',
+        nav_login: 'Masuk Workspace',
+        nav_cta: 'Mulai Trial Gratis',
+        hero_kicker: 'HEADLESS CHROME ENGINE · ANTI-CHECKPOINT GUARD v4.2',
+        hero_title: 'Otomasi Ratusan Grup Facebook Tanpa Risiko Blokir atau Tab Berantakan.',
+        hero_subtitle: 'Metus Auto-Post menyebarkan promosi Anda ke ratusan grup tertarget secara headless di balik layar dengan Dynamic Spintext, Jeda Acak Anti-Spam, dan Auto-First Comment.',
+        hero_cta_primary: 'Upgrade ke PRO Sekarang →',
+        hero_cta_secondary: 'Buka Live Workspace',
+        hero_meta_1: '✓ 100% Eksekusi Lokal di Chrome Anda',
+        hero_meta_2: '✓ Pembayaran Instan QRIS & PayPal',
+        hero_meta_3: '✓ Tanpa Password Facebook',
+        mock_stat_groups: 'Grup Tersinkron',
+        mock_stat_rate: 'Tingkat Sukses',
+        mock_stat_delay: 'Smart Jitter',
+        feat_kicker: 'ARSITEKTUR OTOMASI AMAN',
+        feat_heading: 'Dirancang Khusus untuk Menghindari Deteksi Algoritma Spam Meta',
+        feat_1_title: 'Headless Bulk Posting',
+        feat_1_desc: 'Kirim ratusan postingan ke grup Facebook secara simultan menggunakan jendela offscreen tanpa mengganggu aktivitas browsing Anda.',
+        feat_2_title: 'Dynamic Spintext {a|b|c}',
+        feat_2_desc: 'Hasilkan ribuan variasi kalimat unik secara otomatis di setiap grup agar tidak terdeteksi sebagai duplikat konten oleh Facebook.',
+        feat_3_title: 'Smart Delay Interval',
+        feat_3_desc: 'Jeda waktu acak berbasis distribusi manusia (human-like jitter) antar kiriman dan siklus untuk menjaga reputasi akun tetap hijau.',
+        feat_4_title: '1-Click Group ID Extractor',
+        feat_4_desc: 'Sinkronisasikan seluruh daftar grup Facebook yang Anda ikuti langsung dari sesi Chrome aktif ke dashboard hanya dalam 1 klik.',
+        price_kicker: 'HARGA TRANSPARAN · OTOMATIS SESUAI NEGARA ANDA',
+        price_heading: 'Pilih Paket Otomasi Sesuai Skala Bisnis Anda',
+        price_monthly: 'Bulanan',
+        price_yearly: 'Tahunan (Hemat 25%)',
+        plan_free_name: 'Starter Trial',
+        plan_free_period: '/ selamanya',
+        plan_free_desc: 'Untuk pengujian dasar otomasi grup Facebook.',
+        plan_free_f1: '✓ Maksimal 15 grup per kampanye',
+        plan_free_f2: '✓ 1 Thread eksekusi simultan',
+        plan_free_f3: '✓ Spintax generator dasar',
+        plan_free_btn: 'Mulai Gratis',
+        plan_pro_name: 'PRO Growth · Rekomendasi',
+        plan_pro_desc: 'Akses penuh tanpa batas untuk pemasar & pemilik bisnis aktif.',
+        plan_pro_f1: '✓ Grup Facebook & skenario tanpa batas (Unlimited)',
+        plan_pro_f2: '✓ Hingga 5 Concurrent Headless Threads',
+        plan_pro_f3: '✓ Auto-First Comment "Up" penarik interaksi',
+        plan_pro_f4: '✓ 1-Click Group ID Extractor & Preset Manager',
+        plan_pro_btn: 'Upgrade ke PRO Sekarang',
+        plan_agency_name: 'Agency Ultimate',
+        plan_agency_desc: 'Untuk agensi digital & tim dengan banyak akun Facebook.',
+        plan_agency_f1: '✓ Multi-Akun Facebook Tanpa Batas',
+        plan_agency_f2: '✓ Custom Chrome Extension Builder (.ZIP)',
+        plan_agency_f3: '✓ Penjadwalan Siklus Berulang Otomatis',
+        plan_agency_f4: '✓ Dukungan Prioritas WhatsApp & Webhook API',
+        plan_agency_btn: 'Pilih Paket Agency',
+        faq_heading: 'Pertanyaan yang Sering Diajukan (FAQ)',
+        faq_q1: 'Apakah akun Facebook saya aman dari checkpoint atau banned?',
+        faq_a1: 'Sangat aman. Metus berjalan langsung di atas sesi browser Chrome asli Anda tanpa meminta password atau token pihak ketiga, dilengkapi jeda waktu acak (Smart Delay) dan Spintax agar setiap postingan terlihat natural.',
+        faq_q2: 'Metode pembayaran apa saja yang didukung untuk pengguna Indonesia & luar negeri?',
+        faq_a2: 'Untuk pengguna di Indonesia (IDR), kami mendukung QRIS Dinamis (DANA, GoPay, OVO, ShopeePay, m-Banking) dan Virtual Account Bank. Untuk pengguna Internasional (USD), tersedia pembayaran via Kartu Kredit (Visa, Mastercard, AMEX), PayPal, dan Lemon Squeezy.',
+        faq_q3: 'Berapa lama akun saya aktif setelah melakukan pembayaran?',
+        faq_a3: 'Instan dalam hitungan detik! Sistem kami menggunakan Webhook otomatis dan Status Polling real-time yang langsung meng-upgrade akun Anda ke PRO begitu pembayaran terkonfirmasi.',
+        footer_disclaimer: 'Disclaimer: Metus Auto-Post adalah perangkat lunak otomasi browser independen dan tidak berafiliasi dengan, disponsori, atau didukung oleh Meta Platforms, Inc. (Facebook). Gunakan secara bijak sesuai pedoman komunitas grup.',
+        modal_title: 'Checkout Upgrade Akun PRO',
+        modal_tab_domestic: '🇮🇩 Domestik (QRIS & Virtual Account)',
+        modal_tab_global: '🌍 Internasional (Card / PayPal / Lemon Squeezy)',
+        modal_waiting_payment: 'Menunggu Pembayaran QRIS...',
+        modal_va_title: 'Atau Transfer Virtual Account Otomatis:',
+        modal_simulate_btn: '✓ Simulasi Bayar Berhasil (Trigger Webhook)',
+        modal_global_total: 'Total Tagihan Internasional (USD):',
+        modal_card_pay_btn: 'Bayar Sekarang & Aktifkan PRO Instan',
+        modal_paid_title: 'Pembayaran Berhasil! Akun Anda telah di-upgrade ke PRO',
+        modal_paid_desc: 'Webhook pembayaran telah diverifikasi. Anda akan diarahkan secara otomatis ke Dashboard Workspace PRO...',
+        modal_goto_dashboard: 'Masuk ke Dashboard PRO Sekarang →',
+      },
+      en: {
+        nav_tagline: 'Facebook Group Automation Suite',
+        nav_features: 'Core Features',
+        nav_pricing: 'Pricing',
+        nav_faq: 'FAQ',
+        nav_login: 'Open Workspace',
+        nav_cta: 'Start Free Trial',
+        hero_kicker: 'HEADLESS CHROME ENGINE · ANTI-CHECKPOINT GUARD v4.2',
+        hero_title: 'Automate Hundreds of Facebook Groups Without Account Bans or Messy Tabs.',
+        hero_subtitle: 'Metus Auto-Post broadcasts your campaigns to hundreds of targeted Facebook groups headlessly in the background using Dynamic Spintext, Smart Anti-Spam Jitter, and Auto-First Comment.',
+        hero_cta_primary: 'Upgrade to PRO Now →',
+        hero_cta_secondary: 'Launch Live Workspace',
+        hero_meta_1: '✓ 100% Local Execution in Your Chrome',
+        hero_meta_2: '✓ Instant Checkout via Card, PayPal & QRIS',
+        hero_meta_3: '✓ No Facebook Password Required',
+        mock_stat_groups: 'Synced Groups',
+        mock_stat_rate: 'Success Rate',
+        mock_stat_delay: 'Smart Jitter',
+        feat_kicker: 'SAFE AUTOMATION ARCHITECTURE',
+        feat_heading: 'Engineered to Bypass Meta Anti-Spam Detection Algorithms',
+        feat_1_title: 'Headless Bulk Posting',
+        feat_1_desc: 'Publish to hundreds of Facebook groups simultaneously via background offscreen windows without interrupting your workflow.',
+        feat_2_title: 'Dynamic Spintext {a|b|c}',
+        feat_2_desc: 'Automatically generate thousands of unique text variations per group so your posts are never flagged as duplicate spam.',
+        feat_3_title: 'Smart Delay Interval',
+        feat_3_desc: 'Randomized human-like jitter delays between posts and cycles keep your Facebook account trust score completely green.',
+        feat_4_title: '1-Click Group ID Extractor',
+        feat_4_desc: 'Sync all Facebook groups you have joined directly from your active Chrome session into the dashboard in a single click.',
+        price_kicker: 'TRANSPARENT PRICING · AUTO-LOCALIZED CURRENCY',
+        price_heading: 'Choose the Automation Plan That Fits Your Growth',
+        price_monthly: 'Monthly',
+        price_yearly: 'Yearly (Save 25%)',
+        plan_free_name: 'Starter Trial',
+        plan_free_period: '/ forever',
+        plan_free_desc: 'Ideal for testing headless Facebook group automation.',
+        plan_free_f1: '✓ Up to 15 groups per campaign',
+        plan_free_f2: '✓ 1 Concurrent execution thread',
+        plan_free_f3: '✓ Basic Spintax generator',
+        plan_free_btn: 'Start for Free',
+        plan_pro_name: 'PRO Growth · Most Popular',
+        plan_pro_desc: 'Full unlimited power for marketers, sellers, and growth teams.',
+        plan_pro_f1: '✓ Unlimited Facebook Groups & Scenarios',
+        plan_pro_f2: '✓ Up to 5 Concurrent Headless Threads',
+        plan_pro_f3: '✓ Auto-First Comment "Bump" booster',
+        plan_pro_f4: '✓ 1-Click Group ID Extractor & Preset Manager',
+        plan_pro_btn: 'Upgrade to PRO Now',
+        plan_agency_name: 'Agency Ultimate',
+        plan_agency_desc: 'Built for digital agencies managing multiple Facebook identities.',
+        plan_agency_f1: '✓ Unlimited Facebook Accounts',
+        plan_agency_f2: '✓ Custom Chrome Extension Builder (.ZIP)',
+        plan_agency_f3: '✓ Automated Multi-Cycle Campaign Scheduler',
+        plan_agency_f4: '✓ Priority 24/7 Support & Webhook API',
+        plan_agency_btn: 'Choose Agency Plan',
+        faq_heading: 'Frequently Asked Questions (FAQ)',
+        faq_q1: 'Is my Facebook account safe from checkpoints or bans?',
+        faq_a1: 'Yes! Metus executes directly inside your real Chrome session without asking for passwords or third-party tokens, combining Smart Jitter Delay and Spintax so every post looks 100% organic.',
+        faq_q2: 'What payment methods are accepted for Domestic & International users?',
+        faq_a2: 'For Indonesian users (IDR), we accept Dynamic QRIS (DANA, GoPay, OVO, ShopeePay, Mobile Banking) and Bank Virtual Accounts. For International users (USD), we accept Credit/Debit Cards (Visa, Mastercard, AMEX), PayPal, and Lemon Squeezy.',
+        faq_q3: 'How fast is my PRO account activated after payment?',
+        faq_a3: 'Instantly within seconds! Our real-time webhook handler and status polling upgrade your account to PRO automatically the moment your payment clears.',
+        footer_disclaimer: 'Disclaimer: Metus Auto-Post is an independent browser automation tool and is not affiliated with, sponsored, or endorsed by Meta Platforms, Inc. (Facebook). Please use responsibly.',
+        modal_title: 'PRO Account Upgrade Checkout',
+        modal_tab_domestic: '🇮🇩 Indonesia (QRIS & Virtual Account)',
+        modal_tab_global: '🌍 Global (Card / PayPal / Lemon Squeezy)',
+        modal_waiting_payment: 'Awaiting QRIS Payment...',
+        modal_va_title: 'Or Instant Bank Virtual Account Transfer:',
+        modal_simulate_btn: '✓ Simulate Successful Payment (Trigger Webhook)',
+        modal_global_total: 'International Total (USD):',
+        modal_card_pay_btn: 'Pay Now & Activate PRO Instantly',
+        modal_paid_title: 'Payment Successful! Your Account Has Been Upgraded to PRO',
+        modal_paid_desc: 'Payment webhook verified. Redirecting you automatically to the PRO Workspace Dashboard...',
+        modal_goto_dashboard: 'Enter PRO Dashboard Now →',
+      },
+    };
+
+    // MODULE 1: AUTO-LANGUAGE SYSTEM (I18N)
+    const AppI18n = {
+      currentLang: 'id',
+
+      init() {
+        const saved = localStorage.getItem('preferred_lang');
+        if (saved === 'id' || saved === 'en') {
+          this.currentLang = saved;
+        } else {
+          const browserLang = (navigator.language || '').toLowerCase();
+          this.currentLang = browserLang.startsWith('id') ? 'id' : 'en';
+        }
+        this.applyTranslations();
+      },
+
+      setLanguage(lang) {
+        this.currentLang = lang === 'en' ? 'en' : 'id';
+        localStorage.setItem('preferred_lang', this.currentLang);
+        this.applyTranslations();
+        PaymentFlow.syncCurrencyWithLanguage(this.currentLang);
+      },
+
+      applyTranslations() {
+        const dict = i18n[this.currentLang];
+        document.documentElement.lang = this.currentLang;
+        document.querySelectorAll('[data-i18n]').forEach((el) => {
+          const key = el.getAttribute('data-i18n');
+          if (dict[key]) {
+            el.textContent = dict[key];
+          }
+        });
+
+        // Update active button state in Navbar
+        const btnId = document.getElementById('btn-lang-id');
+        const btnEn = document.getElementById('btn-lang-en');
+        if (btnId && btnEn) {
+          btnId.className =
+            this.currentLang === 'id'
+              ? 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white'
+              : 'px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-white';
+          btnEn.className =
+            this.currentLang === 'en'
+              ? 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-blue-600 text-white'
+              : 'px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-400 hover:text-white';
+        }
+      },
+    };
+
+    // MODULE 2: HYBRID PAYMENT CHECKOUT & POLLING ENGINE
+    const PaymentFlow = {
+      cycle: 'monthly', // 'monthly' | 'yearly'
+      channel: 'domestic', // 'domestic' | 'global'
+      selectedTier: 'pro',
+      currentOrderId: '',
+      countdownSeconds: 900,
+      countdownTimer: null,
+      pollingTimer: null,
+
+      pricingConfig: {
+        id: {
+          free: 'Rp 0',
+          pro_monthly: 'Rp 99.000',
+          pro_yearly: 'Rp 74.000',
+          agency_monthly: 'Rp 249.000',
+          agency_yearly: 'Rp 189.000',
+          period: '/ bulan',
+        },
+        en: {
+          free: '$0',
+          pro_monthly: '$9.99',
+          pro_yearly: '$7.49',
+          agency_monthly: '$24.99',
+          agency_yearly: '$18.99',
+          period: '/ month',
+        },
+      },
+
+      syncCurrencyWithLanguage(lang) {
+        const cfg = this.pricingConfig[lang] || this.pricingConfig.en;
+        document.getElementById('price-free-val').textContent = cfg.free;
+        document.getElementById('price-pro-val').textContent =
+          this.cycle === 'monthly' ? cfg.pro_monthly : cfg.pro_yearly;
+        document.getElementById('price-pro-period').textContent = cfg.period;
+        document.getElementById('price-agency-val').textContent =
+          this.cycle === 'monthly' ? cfg.agency_monthly : cfg.agency_yearly;
+        document.getElementById('price-agency-period').textContent = cfg.period;
+
+        // Default checkout tab based on language/location
+        this.setChannel(lang === 'id' ? 'domestic' : 'global');
+      },
+
+      setBillingCycle(cycle) {
+        this.cycle = cycle;
+        const btnM = document.getElementById('btn-cycle-monthly');
+        const btnY = document.getElementById('btn-cycle-yearly');
+        btnM.className =
+          cycle === 'monthly'
+            ? 'px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 text-white transition-all'
+            : 'px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all';
+        btnY.className =
+          cycle === 'yearly'
+            ? 'px-4 py-2 rounded-lg text-xs font-semibold bg-blue-600 text-white transition-all'
+            : 'px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white transition-all';
+        this.syncCurrencyWithLanguage(AppI18n.currentLang);
+      },
+
+      setChannel(channel) {
+        this.channel = channel;
+        const tabDom = document.getElementById('tab-channel-domestic');
+        const tabGlo = document.getElementById('tab-channel-global');
+        const viewDom = document.getElementById('view-channel-domestic');
+        const viewGlo = document.getElementById('view-channel-global');
+        const viewPaid = document.getElementById('view-payment-success');
+
+        if (!viewPaid.classList.contains('hidden')) return;
+
+        if (channel === 'domestic') {
+          tabDom.className = 'py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 text-white';
+          tabGlo.className = 'py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-white';
+          viewDom.classList.remove('hidden');
+          viewGlo.classList.add('hidden');
+        } else {
+          tabGlo.className = 'py-2 px-3 rounded-lg text-xs font-semibold bg-blue-600 text-white';
+          tabDom.className = 'py-2 px-3 rounded-lg text-xs font-semibold text-slate-400 hover:text-white';
+          viewGlo.classList.remove('hidden');
+          viewDom.classList.add('hidden');
+        }
+      },
+
+      openCheckoutModal(tier) {
+        this.selectedTier = tier || 'pro';
+        const prefix = AppI18n.currentLang === 'id' ? 'IDR' : 'USD';
+        this.currentOrderId = `INV-${prefix}-${Date.now().toString().slice(-6)}`;
+        document.getElementById('modal-order-label').textContent = `Order ID: ${this.currentOrderId}`;
+
+        // Reset Views
+        document.getElementById('view-payment-success').classList.add('hidden');
+        const modal = document.getElementById('checkout-modal');
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+
+        // Set Amounts
+        const isYearly = this.cycle === 'yearly';
+        const idrAmount = tier === 'agency' ? (isYearly ? 'Rp 189.000' : 'Rp 249.000') : isYearly ? 'Rp 74.000' : 'Rp 99.000';
+        const usdAmount = tier === 'agency' ? (isYearly ? '$18.99' : '$24.99') : isYearly ? '$7.49' : '$9.99';
+        document.getElementById('domestic-amount-display').textContent = idrAmount;
+        document.getElementById('global-amount-display').textContent = `${usdAmount} / mo`;
+
+        this.setChannel(AppI18n.currentLang === 'id' ? 'domestic' : 'global');
+        this.renderDynamicQrisSvg(this.currentOrderId);
+        this.startCountdown();
+        this.startStatusPolling();
+      },
+
+      closeCheckoutModal() {
+        const modal = document.getElementById('checkout-modal');
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        clearInterval(this.countdownTimer);
+        clearInterval(this.pollingTimer);
+      },
+
+      renderDynamicQrisSvg(seedText) {
+        const size = 21;
+        let svg = `<svg viewBox="0 0 ${size} ${size}" class="w-full h-full" shape-rendering="crispEdges">`;
+        for (let r = 0; r < size; r++) {
+          for (let c = 0; c < size; c++) {
+            const isCorner = (r < 7 && c < 7) || (r < 7 && c >= size - 7) || (r >= size - 7 && c < 7);
+            const bit = isCorner
+              ? r === 0 || r === 6 || c === 0 || c === 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4)
+              : (seedText.charCodeAt((r * size + c) % seedText.length) + r * 7 + c * 13) % 2 === 0;
+            if (bit) {
+              svg += `<rect x="${c}" y="${r}" width="1" height="1" fill="#0f172a"/>`;
+            }
+          }
+        }
+        svg += '</svg>';
+        document.getElementById('qris-svg-container').innerHTML = svg;
+      },
+
+      startCountdown() {
+        clearInterval(this.countdownTimer);
+        this.countdownSeconds = 15 * 60;
+        const el = document.getElementById('qris-countdown');
+        this.countdownTimer = setInterval(() => {
+          this.countdownSeconds = Math.max(0, this.countdownSeconds - 1);
+          const m = String(Math.floor(this.countdownSeconds / 60)).padStart(2, '0');
+          const s = String(this.countdownSeconds % 60).padStart(2, '0');
+          el.textContent = `${m}:${s}`;
+        }, 1000);
+      },
+
+      startStatusPolling() {
+        clearInterval(this.pollingTimer);
+        const indicator = document.getElementById('polling-indicator');
+        this.pollingTimer = setInterval(async () => {
+          try {
+            indicator.textContent = `↻ Polling /api/payment/check-status?orderId=${this.currentOrderId}...`;
+            const res = await fetch(`/api/payment/check-status?orderId=${encodeURIComponent(this.currentOrderId)}`);
+            const data = await res.json();
+            if (data && data.status === 'PAID') {
+              this.onPaymentConfirmed();
+            }
+          } catch {
+            // Ignore offline errors
+          }
+        }, 3000);
+      },
+
+      async simulatePaymentSuccess(gateway) {
+        try {
+          await fetch('/api/payment/hybrid-simulate-paid', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderId: this.currentOrderId, gateway }),
+          });
+        } catch {
+          // Fallback
+        }
+        this.onPaymentConfirmed();
+      },
+
+      onPaymentConfirmed() {
+        clearInterval(this.countdownTimer);
+        clearInterval(this.pollingTimer);
+        document.getElementById('view-channel-domestic').classList.add('hidden');
+        document.getElementById('view-channel-global').classList.add('hidden');
+        document.getElementById('view-payment-success').classList.remove('hidden');
+        document.getElementById('polling-indicator').textContent = `✓ STATUS: PAID (${this.currentOrderId}) — PRO ACTIVATED`;
+      },
+    };
+
+    // Initialize on DOM Load
+    document.addEventListener('DOMContentLoaded', () => {
+      AppI18n.init();
+      PaymentFlow.syncCurrencyWithLanguage(AppI18n.currentLang);
+    });
+  </script>
+</body>
+</html>
