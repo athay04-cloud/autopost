@@ -234,13 +234,13 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/20 text-white">
                       Manifest V3 Ready
                     </span>
-                    <span className="text-xs opacity-90 font-medium">Versi 1.0.5 (Anti-Duplikasi Teks & Silent Background Tab)</span>
+                    <span className="text-xs opacity-90 font-medium">Versi 1.0.6 (Mode Headless Stealth & Anti-Duplikasi)</span>
                   </div>
                   <h3 className="text-lg font-bold">
                     metus-auto-post-chrome-extension.zip
                   </h3>
                   <p className="text-xs text-white/80 max-w-md">
-                    Berisi berkas lengkap <code>manifest.json</code>, <code>background.js</code>, <code>content.js</code>, <code>popup.html</code>, dan panduan instalasi.
+                    Berisi berkas lengkap <code>manifest.json</code>, <code>background.js</code>, <code>content.js</code>, <code>headless-poster.js</code>, dan panduan instalasi.
                   </p>
                 </div>
 
@@ -267,6 +267,22 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     </>
                   )}
                 </button>
+              </div>
+
+              {/* Headless & Chromeless Feature Callout */}
+              <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/20 flex items-start gap-3">
+                <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-xs space-y-1">
+                  <div className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
+                    <span>⚡ Mode Headless / Stealth (Chromeless) Aktif</span>
+                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">100% Senyap</span>
+                  </div>
+                  <div className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
+                    <strong>Tanpa New Tab di Jendela Aktif:</strong> Ekstensi kini bekerja di jendela popup stealth yang diminimalkan dan diposisikan di luar batas layar (off-screen). Tab bar browser Anda tetap 100% bersih tanpa ada tab baru yang muncul.
+                    <br />
+                    <strong>Pilihan CLI Murni:</strong> Bagi yang menginginkan mode 100% terminal tanpa membuka browser sama sekali, gunakan berkas <code>headless-poster.js</code> yang sudah disertakan di dalam file ZIP!
+                  </div>
+                </div>
               </div>
 
               {/* Target Dashboard URL Configuration */}

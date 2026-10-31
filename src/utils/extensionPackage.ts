@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.0.5',
-        description: 'Ekstensi otomasi posting Facebook Group di latar belakang (Silent Background Mode) tanpa mencuri fokus layar / tab jumping.',
+        version: '1.0.6',
+        description: 'Ekstensi otomasi posting Facebook Group dalam Mode Headless / Stealth (tanpa membuka tab di jendela kerja Anda dan tanpa mengganggu layar).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -294,23 +294,54 @@ async function processNextPostQueue() {
   }
 }
 
-// Menjalankan postingan pada background tab senyap (active: false - tanpa tab jumping / tanpa mengganggu layar)
+// Menjalankan postingan dalam MODE HEADLESS / CHROMELESS STEALTH
+// 1. TIDAK ADA tab baru yang muncul di jendela aktif pengguna (tab bar tetap bersih 100%)
+// 2. TIDAK ADA pencurian fokus layar (focused: false)
+// 3. Jendela dibuat minimized & diposisikan di luar koordinat layar (left: -25000) sehingga tidak terlihat (Chromeless feel)
+// 4. Jendela langsung dihancurkan secara otomatis (chrome.windows.remove) setelah posting selesai/gagal!
 async function executeSingleFacebookGroupPost(request) {
   const groupUrl = "https://www.facebook.com/groups/" + request.groupId + "/?sorting_setting=CHRONOLOGICAL";
-  console.log("[Metus Silent Background] Membuka background tab senyap (active: false):", groupUrl);
+  console.log("[Metus Headless Engine] Meluncurkan background stealth window untuk:", groupUrl);
 
-  // active: false memastikan tab terbuka di latar belakang tanpa mencuri fokus atau memindahkan layar pengguna!
-  let tab = null;
+  let win = null;
+  let tabId = null;
+
   try {
-    tab = await chrome.tabs.create({ url: groupUrl, active: false });
+    // Buat jendela popup tersembunyi / minimized di luar layar
+    try {
+      win = await chrome.windows.create({
+        url: groupUrl,
+        focused: false,
+        state: "minimized",
+        type: "popup",
+        left: -25000,
+        top: -25000,
+        width: 1024,
+        height: 768
+      });
+      if (win && win.tabs && win.tabs.length > 0) {
+        tabId = win.tabs[0].id;
+      } else if (win && win.id) {
+        const winTabs = await chrome.tabs.query({ windowId: win.id });
+        if (winTabs && winTabs.length > 0) tabId = winTabs[0].id;
+      }
+    } catch (winErr) {
+      console.warn("[Metus Headless] Gagal membuat minimized popup, mencoba fallback ke background tab:", winErr);
+    }
 
-    // 1. Tunggu hingga tab Facebook di background selesai loading (status complete & readyState)
-    const isLoaded = await waitForFacebookTabReady(tab.id, 25000);
+    // Fallback jika mode window popup tidak diizinkan di sistem tertentu
+    if (!tabId) {
+      const fbTab = await chrome.tabs.create({ url: groupUrl, active: false });
+      tabId = fbTab.id;
+    }
+
+    // 1. Tunggu hingga tab Facebook di background stealth selesai loading (status complete & readyState)
+    const isLoaded = await waitForFacebookTabReady(tabId, 25000);
     if (!isLoaded) {
       return {
         success: false,
         postUrl: groupUrl,
-        error: "Gagal memuat halaman grup Facebook di background (timeout 25s). Pastikan koneksi stabil."
+        error: "Gagal memuat halaman grup Facebook di background stealth (timeout 25s). Pastikan koneksi stabil."
       };
     }
 
@@ -319,7 +350,7 @@ async function executeSingleFacebookGroupPost(request) {
 
     // 3. Jalankan otomasi DOM posting langsung di dalam konteks tab Facebook di background
     const execResults = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: tabId },
       func: executeFacebookPostAutomation,
       args: [request.content, request.firstComment || ""]
     });
@@ -336,18 +367,22 @@ async function executeSingleFacebookGroupPost(request) {
       message: result.message
     };
   } catch (err) {
-    console.error("[Metus Background] Error saat mengeksekusi di background tab:", err);
+    console.error("[Metus Headless] Error saat mengeksekusi di background:", err);
     return {
       success: false,
       postUrl: groupUrl,
       error: "Gagal memproses otomasi grup: " + (err.message || String(err))
     };
   } finally {
-    // PEMBERSIHAN OTOMATIS: Tab background SELALU ditutup otomatis (baik sukses maupun gagal)
-    // sehingga TIDAK ADA tab Facebook yang tertinggal atau menumpuk di browser Anda!
-    if (tab && tab.id) {
+    // PEMBERSIHAN OTOMATIS: Jendela stealth SELALU ditutup otomatis (baik sukses maupun gagal)
+    // sehingga TIDAK ADA jendela/tab Facebook yang tertinggal atau menumpuk di komputer Anda!
+    if (win && win.id) {
       setTimeout(() => {
-        try { chrome.tabs.remove(tab.id); } catch (e) {}
+        try { chrome.windows.remove(win.id); } catch (e) {}
+      }, 2500);
+    } else if (tabId) {
+      setTimeout(() => {
+        try { chrome.tabs.remove(tabId); } catch (e) {}
       }, 2500);
     }
   }
@@ -1510,50 +1545,223 @@ document.addEventListener("DOMContentLoaded", () => {
 `,
   },
   {
+    name: 'headless-poster.js',
+    description: 'Skrip Node.js Headless (Puppeteer) murni untuk eksekusi terminal tanpa GUI browser',
+    content: `/**
+ * METUS AUTO-POST - STANDALONE HEADLESS NODE.JS CLI RUNNER
+ * --------------------------------------------------------
+ * Menjalankan posting Facebook secara 100% HEADLESS (tanpa tampilan jendela sama sekali)
+ * menggunakan Puppeteer di terminal/VPS/latar belakang komputer Anda.
+ * 
+ * CARA MENGGUNAKAN:
+ * 1. Pastikan Node.js sudah terpasang di komputer Anda.
+ * 2. Jalankan:
+ *    npm install puppeteer
+ * 3. Isi COOKIE_C_USER, COOKIE_XS, TARGET_GROUPS, dan CONTENT di bawah ini.
+ * 4. Jalankan script:
+ *    node headless-poster.js
+ */
+
+const puppeteer = require('puppeteer');
+
+// ================= KONFIGURASI AKUN & POSTINGAN =================
+const CONFIG = {
+  // Ambil dari cookie Facebook di browser Chrome Anda (Inspect -> Application -> Cookies -> facebook.com)
+  c_user: "PASTE_NILAI_C_USER_ANDA",
+  xs: "PASTE_NILAI_XS_ANDA",
+
+  // Daftar ID atau Slug grup Facebook tujuan
+  targetGroups: [
+    "INFO.KOST.DAN.KONTRAKAN.SOLO.SUKOHARJO",
+    "64000anggota",
+    // Tambahkan ID grup lainnya di sini
+  ],
+
+  // Konten postingan
+  postContent: "Halo semua, info sewa kos dan ruko siap huni area Solo dan sekitarnya. Fasilitas lengkap & lokasi strategis. Hubungi via DM untuk info lebih lanjut ya!",
+
+  // Jeda anti-spam antar grup (detik)
+  minDelaySec: 15,
+  maxDelaySec: 30,
+};
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRandomDelay(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function runHeadlessPoster() {
+  console.log("==================================================");
+  console.log("🚀 METUS HEADLESS FB POSTER (CHROMELESS CLI)");
+  console.log("==================================================");
+
+  if (CONFIG.c_user.includes("PASTE_NILAI")) {
+    console.error("❌ PERINGATAN: Harap isi nilai c_user dan xs di baris CONFIG terlebih dahulu!");
+    process.exit(1);
+  }
+
+  // Luncurkan browser dalam mode TRUE HEADLESS (tanpa GUI)
+  const browser = await puppeteer.launch({
+    headless: "new", // Mode headless modern Chromium
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-notifications",
+      "--disable-gpu",
+      "--mute-audio"
+    ]
+  });
+
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 800 });
+  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
+
+  // Pasang Cookies sesi login Facebook
+  await page.setCookie(
+    { name: "c_user", value: CONFIG.c_user, domain: ".facebook.com" },
+    { name: "xs", value: CONFIG.xs, domain: ".facebook.com" }
+  );
+
+  console.log("✅ Cookie sesi berhasil disuntikkan ke Headless Browser.");
+
+  for (let i = 0; i < CONFIG.targetGroups.length; i++) {
+    const groupId = CONFIG.targetGroups[i];
+    const groupUrl = "https://www.facebook.com/groups/" + groupId + "/?sorting_setting=CHRONOLOGICAL";
+
+    console.log(\`\\n[\${i + 1}/\${CONFIG.targetGroups.length}] Mengakses grup: \${groupId}...\`);
+
+    try {
+      await page.goto(groupUrl, { waitUntil: "networkidle2", timeout: 45000 });
+      await sleep(4000);
+
+      // Cari kotak "Tulis sesuatu..."
+      const composerFound = await page.evaluate(() => {
+        const phrases = ["tulis sesuatu", "write something", "buat postingan", "create a public post"];
+        const els = Array.from(document.querySelectorAll('div[role="button"], div[tabindex="0"], span'));
+        for (const el of els) {
+          const t = (el.innerText || el.getAttribute("aria-label") || "").trim().toLowerCase();
+          if (phrases.some(p => t.includes(p)) && !t.includes("komentar") && !t.includes("comment")) {
+            el.click();
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (!composerFound) {
+        console.warn("⚠️ Kotak 'Tulis sesuatu' tidak ditemukan di grup ini. Melewati...");
+        continue;
+      }
+
+      await sleep(2500);
+
+      // Ketik konten ke dalam dialog
+      const typed = await page.evaluate((text) => {
+        const dialog = document.querySelector('div[role="dialog"]');
+        const editor = dialog ? (
+          dialog.querySelector('div[role="textbox"][contenteditable="true"]') ||
+          dialog.querySelector('div[contenteditable="true"]')
+        ) : null;
+
+        if (editor) {
+          editor.focus();
+          document.execCommand("insertText", false, text);
+          editor.dispatchEvent(new Event("input", { bubbles: true }));
+          return true;
+        }
+        return false;
+      }, CONFIG.postContent);
+
+      if (!typed) {
+        console.warn("⚠️ Gagal menemukan dialog textbox untuk mengetik postingan.");
+        continue;
+      }
+
+      await sleep(2000);
+
+      // Klik tombol Posting
+      const posted = await page.evaluate(() => {
+        const dialog = document.querySelector('div[role="dialog"]') || document;
+        const submitWords = ["posting", "post", "kirim", "publish", "bagikan"];
+        const btns = Array.from(dialog.querySelectorAll('div[role="button"], button'));
+        for (const b of btns) {
+          const t = (b.getAttribute("aria-label") || b.innerText || "").trim().toLowerCase();
+          if (submitWords.some(w => t === w || t.startsWith(w))) {
+            b.click();
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (posted) {
+        console.log(\`🎉 BERHASIL: Postingan terbit di grup \${groupId}!\`);
+      } else {
+        console.warn("⚠️ Tombol 'Posting' tidak ditemukan di dialog.");
+      }
+
+    } catch (err) {
+      console.error(\`❌ Gagal pada grup \${groupId}:\`, err.message);
+    }
+
+    if (i < CONFIG.targetGroups.length - 1) {
+      const delay = getRandomDelay(CONFIG.minDelaySec, CONFIG.maxDelaySec);
+      console.log(\`⏳ Menunggu jeda anti-spam \${delay} detik sebelum grup berikutnya...\`);
+      await sleep(delay * 1000);
+    }
+  }
+
+  await browser.close();
+  console.log("\\n🏁 Selesai! Semua antrean postingan headless selesai diproses.");
+}
+
+runHeadlessPoster().catch(console.error);
+`,
+  },
+  {
     name: 'README.txt',
-    description: 'Panduan lengkap cara pemasangan di Google Chrome',
+    description: 'Panduan lengkap cara pemasangan di Google Chrome & Mode Headless',
     content: `========================================================================
-PANDUAN LENGKAP CARA INSTALL EKSTENSI METUS AUTO-POST DI GOOGLE CHROME
+PANDUAN LENGKAP METUS AUTO-POST (CHROME EXTENSION & HEADLESS RUNNER)
 ========================================================================
 
-Versi: 1.0.4 (Pembaruan: Fix Target Komposer Pill "Tulis Sesuatu..." & Isolasi Anti-Komentar Feed)
+Versi: 1.0.6 (Pembaruan: Mode Headless Stealth Window & Standalone CLI Runner)
 URL Dashboard: https://athay04-cloud.github.io/autopost/
 
-Terima kasih telah mengunduh paket ekstensi Chrome Metus Auto-Post!
-Ikuti langkah berikut untuk memasangnya:
+Kini Metus Auto-Post mendukung 2 MODE OTOMASI:
 
 ------------------------------------------------------------------------
-LANGKAH 1: EKSTRAK BERKAS ZIP
+MODE 1: CHROME EXTENSION (MODE STEALTH / CHROMELESS OTOMATIS)
 ------------------------------------------------------------------------
-1. Ekstrak 'metus-auto-post-chrome-extension.zip' ke folder komputer Anda.
-2. Pastikan file berikut ada di dalam folder:
-   - manifest.json
-   - background.js
-   - content.js
-   - dashboard_bridge.js
-   - popup.html
-   - popup.js
+- Berjalan otomatis di Google Chrome Anda.
+- Tanpa membuka tab di jendela kerja Anda (tab bar Anda tetap bersih 100%).
+- Ekstensi membuka jendela tersembunyi (minimized & di luar batas layar) di latar belakang.
+- Setelah posting selesai, jendela langsung ditutup otomatis!
+
+Cara Pasang di Google Chrome:
+1. Ekstrak file zip ini ke folder komputer Anda.
+2. Buka Google Chrome, ketik pada kolom alamat: chrome://extensions
+3. Aktifkan "Developer mode" di pojok kanan atas.
+4. Klik tombol "Load unpacked" (Muat yang belum dibongkar) di pojok kiri atas.
+5. Pilih folder hasil ekstrak tadi.
+6. Buka tab https://www.facebook.com/groups/joins/ lalu klik ikon ekstensi -> "Scan & Sinkronkan Grup Facebook".
+7. Kembali ke Web Dashboard dan mulai posting!
 
 ------------------------------------------------------------------------
-LANGKAH 2: PASANG DI GOOGLE CHROME
+MODE 2: STANDALONE HEADLESS NODE.JS CLI (100% TERMINAL TANPA GUI)
 ------------------------------------------------------------------------
-1. Buka Google Chrome, ketik pada kolom alamat:
-   chrome://extensions
-2. Aktifkan "Developer mode" (Mode Pengembang) di pojok kanan atas.
-3. Klik tombol "Load unpacked" (Muat yang belum dibongkar) di pojok kiri atas.
-4. Pilih folder hasil ekstrak tadi.
-
-------------------------------------------------------------------------
-LANGKAH 3: CARA SINKRONISASI GRUP AGAR TIDAK 0 GRUP
-------------------------------------------------------------------------
-1. Buka tab baru di Chrome dan kunjungi:
-   https://www.facebook.com/groups/joins/
-2. Halaman tersebut akan menampilkan seluruh daftar grup yang Anda ikuti.
-3. Ekstensi secara otomatis memindai seluruh ID & nama grup dari halaman tersebut!
-4. Klik ikon ekstensi Metus di toolbar kanan atas, lalu klik tombol:
-   "Scan & Sinkronkan Grup Facebook"
-5. Seluruh grup Anda akan langsung terdeteksi dan tersimpan ke Web Dashboard:
-   https://athay04-cloud.github.io/autopost/
+Jika Anda menginginkan otomasi 100% HEADLESS murni (tanpa membuka browser sama sekali di layar):
+1. Pastikan komputer Anda terpasang Node.js.
+2. Buka terminal/cmd di folder hasil ekstrak.
+3. Jalankan:
+   npm install puppeteer
+4. Buka file 'headless-poster.js' dan masukkan nilai cookie c_user & xs akun Anda.
+5. Jalankan:
+   node headless-poster.js
+6. Skrip akan mengeksekusi seluruh postingan grup di background terminal secara 100% headless!
 `,
   },
 ];
