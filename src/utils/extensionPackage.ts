@@ -376,7 +376,7 @@ async function executeSingleFacebookGroupPost(request) {
     const execResults = await chrome.scripting.executeScript({
       target: { tabId: tabId },
       func: executeFacebookPostAutomation,
-      args: [request.content, request.firstComment || ""]
+      args: [request.content, request.firstComment || "", Array.isArray(request.photoUrls) ? request.photoUrls : []]
     });
 
     const result = execResults?.[0]?.result || {
@@ -436,7 +436,7 @@ function waitForFacebookTabReady(tabId, maxWaitMs = 25000) {
 }
 
 // Fungsi Otomasi Komposer Facebook (Dieksekusi langsung di DOM Tab Grup Facebook)
-async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
+async function executeFacebookPostAutomation(contentToPost, firstCommentText, photoUrls = []) {
   // Mutex level DOM & Window agar tidak pernah dieksekusi 2x di tab yang sama
   if (
     window.__metus_has_submitted ||
@@ -829,6 +829,48 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
   }
 
   await sleep(800);
+
+  // 7b. Jika ada lampiran foto (photoUrls), konversi ke File & lampirkan via input[type="file"] atau DataTransfer
+  if (Array.isArray(photoUrls) && photoUrls.length > 0) {
+    try {
+      const dt = new DataTransfer();
+      for (let i = 0; i < photoUrls.length; i++) {
+        const src = photoUrls[i];
+        if (!src) continue;
+        const resp = await fetch(src);
+        const blob = await resp.blob();
+        const ext = (blob.type.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "");
+        const file = new File([blob], "metus_photo_" + (i + 1) + "." + ext, {
+          type: blob.type || "image/jpeg"
+        });
+        dt.items.add(file);
+      }
+
+      if (dt.files.length > 0) {
+        const searchRoot = activeContainer || document.querySelector('div[role="dialog"]') || document;
+        let fileInput = searchRoot.querySelector('input[type="file"][accept*="image"], input[type="file"]');
+        if (!fileInput) {
+          fileInput = document.querySelector('div[role="dialog"] input[type="file"], input[type="file"][accept*="image"]');
+        }
+        if (fileInput) {
+          fileInput.files = dt.files;
+          fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+          fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+          await sleep(2500);
+        } else if (editor) {
+          const pasteEvt = new ClipboardEvent("paste", {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt
+          });
+          editor.dispatchEvent(pasteEvt);
+          await sleep(2500);
+        }
+      }
+    } catch (photoErr) {
+      console.warn("[Metus] Gagal melampirkan foto otomatis:", photoErr);
+    }
+  }
 
   // 8. Cari tombol Posting / Kirim di dalam dialog
   const submitWords = ["posting", "post", "kirim", "publish", "bagikan", "berikutnya", "next"];
@@ -1356,6 +1398,7 @@ if (
         groupId: grpId,
         content: event.data.content,
         firstComment: event.data.firstComment,
+        photoUrls: Array.isArray(event.data.photoUrls) ? event.data.photoUrls : [],
       }, (res) => {
         window.postMessage({
           type: "METUS_POST_COMPLETED",

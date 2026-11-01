@@ -33,6 +33,7 @@ import {
   RotateCcw,
   ExternalLink,
   Check,
+  Upload,
 } from 'lucide-react';
 
 interface ContentComposerProps {
@@ -96,6 +97,54 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
   const [copiedLogs, setCopiedLogs] = React.useState(false);
   const [copiedUrlId, setCopiedUrlId] = React.useState<string | null>(null);
   const [copiedLogUrl, setCopiedLogUrl] = React.useState<string | null>(null);
+  const [isDraggingPhoto, setIsDraggingPhoto] = React.useState(false);
+  const [photoUrlInput, setPhotoUrlInput] = React.useState('');
+
+  const photoInputRef = React.useRef<HTMLInputElement>(null);
+
+  const processUploadedFiles = (files: FileList | File[]) => {
+    const fileArray = Array.from(files).filter((file) => file.type.startsWith('image/'));
+    if (fileArray.length === 0) return;
+
+    Promise.all(
+      fileArray.map(
+        (file) =>
+          new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+            reader.onerror = () => resolve('');
+            reader.readAsDataURL(file);
+          })
+      )
+    ).then((dataUrls) => {
+      const validUrls = dataUrls.filter(Boolean);
+      if (validUrls.length > 0) {
+        onUpdateScenario({
+          ...currentScenario,
+          attachmentType: 'photos',
+          photoUrls: [...(currentScenario.photoUrls || []), ...validUrls],
+        });
+      }
+    });
+  };
+
+  const handlePhotoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      processUploadedFiles(e.target.files);
+      e.target.value = '';
+    }
+  };
+
+  const handleAddPhotoUrl = () => {
+    const trimmed = photoUrlInput.trim();
+    if (!trimmed) return;
+    onUpdateScenario({
+      ...currentScenario,
+      attachmentType: 'photos',
+      photoUrls: [...(currentScenario.photoUrls || []), trimmed],
+    });
+    setPhotoUrlInput('');
+  };
 
   const handleCopyPostUrl = (id: string, url: string) => {
     navigator.clipboard.writeText(url);
@@ -338,8 +387,67 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
             );
           })()}
 
-          {/* Color-Picker Badges & Quick Emoji Trigger */}
+          {/* Quick Inline Photo Thumbnails inside Composer if photos are uploaded */}
+          {currentScenario.photoUrls && currentScenario.photoUrls.length > 0 && (
+            <div className="px-3.5 py-2.5 bg-slate-50/60 dark:bg-slate-900/50 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5" />
+                  <span>{currentScenario.photoUrls.length} Foto Terlampir pada Postingan</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>Tambah Foto Lagi</span>
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {currentScenario.photoUrls.map((url, idx) => (
+                  <div
+                    key={idx}
+                    className="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 group shadow-sm"
+                  >
+                    <img
+                      src={url}
+                      alt={`Lampiran Foto ${idx + 1}`}
+                      className="w-full h-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = currentScenario.photoUrls.filter((_, i) => i !== idx);
+                        onUpdateScenario({
+                          ...currentScenario,
+                          photoUrls: updated,
+                          attachmentType: updated.length === 0 && currentScenario.attachmentType === 'photos' ? 'none' : currentScenario.attachmentType,
+                        });
+                      }}
+                      className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-600/90 hover:bg-red-600 text-white text-[10px] flex items-center justify-center shadow"
+                      title="Hapus foto ini"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Color-Picker Badges, Direct Photo Upload Button & Quick Emoji Trigger */}
           <div className="px-3 py-2 bg-slate-50/80 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-700/60 flex flex-wrap items-center justify-between gap-2">
+            {/* Hidden Input File for Photo Upload */}
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handlePhotoFileChange}
+              className="hidden"
+            />
+
             {/* Color Gradient Badges */}
             <div className="flex items-center gap-1.5">
               <span className="text-[11px] text-slate-400 mr-1 hidden sm:inline">Latar:</span>
@@ -363,45 +471,68 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
               ))}
             </div>
 
-            {/* Emoji Trigger */}
-            <div className="relative">
+            {/* Right Controls: Direct Unggah Foto Button + Emoji Trigger */}
+            <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                className="p-1.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded-md transition-colors"
-                title="Pilih emoji"
+                onClick={() => {
+                  onUpdateScenario({
+                    ...currentScenario,
+                    attachmentType: 'photos',
+                  });
+                  photoInputRef.current?.click();
+                }}
+                className="px-2.5 py-1 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/60 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800/70 rounded-lg transition-colors flex items-center gap-1.5 shadow-xs"
+                title="Unggah foto/gambar dari perangkat Anda"
               >
-                <Smile className="w-4 h-4" />
+                <Upload className="w-3.5 h-3.5" />
+                <span>Unggah Foto</span>
+                {currentScenario.photoUrls && currentScenario.photoUrls.length > 0 && (
+                  <span className="px-1.5 py-0.2 bg-blue-600 text-white rounded-full text-[10px]">
+                    {currentScenario.photoUrls.length}
+                  </span>
+                )}
               </button>
 
-              {showEmojiPicker && (
-                <>
-                  <div
-                    className="fixed inset-0 z-20"
-                    onClick={() => setShowEmojiPicker(false)}
-                  />
-                  <div className="absolute right-0 bottom-full mb-1 w-64 p-2 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 z-30 animate-fade-in">
-                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5 px-1">
-                      Emoji Populer
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                  className="p-1.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 rounded-md transition-colors"
+                  title="Pilih emoji"
+                >
+                  <Smile className="w-4 h-4" />
+                </button>
+
+                {showEmojiPicker && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-20"
+                      onClick={() => setShowEmojiPicker(false)}
+                    />
+                    <div className="absolute right-0 bottom-full mb-1 w-64 p-2 bg-white dark:bg-slate-800 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 z-30 animate-fade-in">
+                      <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5 px-1">
+                        Emoji Populer
+                      </div>
+                      <div className="grid grid-cols-5 gap-1 text-base text-center">
+                        {QUICK_EMOJIS.map((emoji) => (
+                          <button
+                            key={emoji}
+                            type="button"
+                            onClick={() => {
+                              insertTextAtCursor(emoji);
+                              setShowEmojiPicker(false);
+                            }}
+                            className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-transform hover:scale-125"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                    <div className="grid grid-cols-5 gap-1 text-base text-center">
-                      {QUICK_EMOJIS.map((emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          onClick={() => {
-                            insertTextAtCursor(emoji);
-                            setShowEmojiPicker(false);
-                          }}
-                          className="p-1 hover:bg-slate-100 dark:hover:bg-slate-700 rounded transition-transform hover:scale-125"
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -528,7 +659,12 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
               }`}
             >
               <ImageIcon className="w-3.5 h-3.5" />
-              <span>Attach photos</span>
+              <span>Unggah Foto / Gambar</span>
+              {currentScenario.photoUrls && currentScenario.photoUrls.length > 0 && (
+                <span className="px-1.5 py-0.2 bg-blue-100 dark:bg-blue-900/70 text-blue-700 dark:text-blue-300 rounded-full text-[10px]">
+                  {currentScenario.photoUrls.length}
+                </span>
+              )}
             </button>
 
             <button
@@ -579,63 +715,138 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
           )}
 
           {currentScenario.attachmentType === 'photos' && (
-            <div className="p-3 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/80 dark:border-slate-700/80 space-y-2">
-              <div className="text-xs text-slate-600 dark:text-slate-300 font-medium">
-                Pilih atau unggah gambar promosi (JPG, PNG):
+            <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 rounded-xl border border-slate-200/80 dark:border-slate-700/80 space-y-3">
+              {/* Drag & Drop + File Picker Area */}
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDraggingPhoto(true);
+                }}
+                onDragLeave={() => setIsDraggingPhoto(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingPhoto(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    processUploadedFiles(e.dataTransfer.files);
+                  }
+                }}
+                className={`p-4 rounded-xl border-2 border-dashed transition-all flex flex-col items-center justify-center text-center gap-2 ${
+                  isDraggingPhoto
+                    ? 'border-blue-500 bg-blue-50/70 dark:bg-blue-950/40'
+                    : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900/60 hover:border-blue-400'
+                }`}
+              >
+                <div className="w-10 h-10 rounded-full bg-blue-50 dark:bg-blue-950/80 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                  <Upload className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    Unggah Foto Promosi dari Komputer / HP Anda
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Format didukung: JPG, PNG, WEBP, GIF (Bisa pilih banyak foto sekaligus atau tarik & lepas ke sini)
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={() => photoInputRef.current?.click()}
+                    className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm shadow-blue-500/20 flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Pilih File Foto dari Perangkat</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const sample = `https://picsum.photos/seed/${Date.now()}/800/600`;
+                      onUpdateScenario({
+                        ...currentScenario,
+                        photoUrls: [...(currentScenario.photoUrls || []), sample],
+                      });
+                    }}
+                    className="px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 rounded-lg transition-colors"
+                  >
+                    + Contoh Foto
+                  </button>
+                </div>
               </div>
+
+              {/* Optional URL Input */}
               <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Masukkan URL foto atau klik unggah mock"
-                  className="flex-1 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none"
+                  value={photoUrlInput}
+                  onChange={(e) => setPhotoUrlInput(e.target.value)}
+                  placeholder="Atau tempel URL gambar langsung (https://...)"
+                  className="flex-1 px-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && e.currentTarget.value) {
-                      onUpdateScenario({
-                        ...currentScenario,
-                        photoUrls: [...(currentScenario.photoUrls || []), e.currentTarget.value],
-                      });
-                      e.currentTarget.value = '';
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddPhotoUrl();
                     }
                   }}
                 />
                 <button
                   type="button"
-                  onClick={() => {
-                    const sample = `https://picsum.photos/seed/${Date.now()}/600/400`;
-                    onUpdateScenario({
-                      ...currentScenario,
-                      photoUrls: [...(currentScenario.photoUrls || []), sample],
-                    });
-                  }}
-                  className="px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 rounded-lg"
+                  onClick={handleAddPhotoUrl}
+                  className="px-3 py-1.5 text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 rounded-lg border border-blue-200 dark:border-blue-800/60 transition-colors"
                 >
-                  + Sample Foto
+                  Tambah URL
                 </button>
               </div>
+
+              {/* Thumbnail Grid */}
               {currentScenario.photoUrls && currentScenario.photoUrls.length > 0 && (
-                <div className="flex flex-wrap gap-2 pt-2">
-                  {currentScenario.photoUrls.map((url, i) => (
-                    <div
-                      key={i}
-                      className="relative w-16 h-16 rounded-lg bg-slate-200 dark:bg-slate-800 overflow-hidden border border-slate-300 dark:border-slate-700 group"
+                <div className="pt-1">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      Daftar Foto Siap Posting ({currentScenario.photoUrls.length} foto):
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onUpdateScenario({
+                          ...currentScenario,
+                          photoUrls: [],
+                        })
+                      }
+                      className="text-[11px] text-red-500 hover:text-red-600 font-medium flex items-center gap-1"
                     >
-                      <div className="w-full h-full flex items-center justify-center text-[10px] text-slate-500 font-mono">
-                        Foto #{i + 1}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onUpdateScenario({
-                            ...currentScenario,
-                            photoUrls: currentScenario.photoUrls.filter((_, idx) => idx !== i),
-                          })
-                        }
-                        className="absolute top-1 right-1 w-4 h-4 bg-red-600 text-white rounded-full text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      <Trash2 className="w-3 h-3" />
+                      <span>Hapus Semua</span>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2.5">
+                    {currentScenario.photoUrls.map((url, i) => (
+                      <div
+                        key={i}
+                        className="relative aspect-square rounded-xl bg-slate-200 dark:bg-slate-800 overflow-hidden border border-slate-300 dark:border-slate-700 group shadow-xs"
                       >
-                        ×
-                      </button>
-                    </div>
-                  ))}
+                        <img
+                          src={url}
+                          alt={`Foto #${i + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-slate-900/75 text-white text-[9px] font-mono">
+                          #{i + 1}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateScenario({
+                              ...currentScenario,
+                              photoUrls: currentScenario.photoUrls.filter((_, idx) => idx !== i),
+                            })
+                          }
+                          className="absolute top-1.5 right-1.5 w-5 h-5 bg-red-600 hover:bg-red-700 text-white rounded-full text-xs flex items-center justify-center shadow transition-transform hover:scale-110"
+                          title="Hapus foto ini"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

@@ -16,7 +16,11 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react';
-import { generateQrMatrix } from '../services/paymentAuthService';
+import {
+  generateQrMatrix,
+  safeFetchJson,
+  apiHybridSimulatePaid,
+} from '../services/paymentAuthService';
 
 interface SaaSLandingPageProps {
   onEnterDashboard: () => void;
@@ -278,14 +282,15 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
     const poll = window.setInterval(async () => {
       try {
         setIsPolling(true);
-        const res = await fetch(`/api/payment/check-status?orderId=${encodeURIComponent(orderId)}`);
-        const data = await res.json();
+        const { data } = await safeFetchJson(
+          `/api/payment/check-status?orderId=${encodeURIComponent(orderId)}`
+        );
         if (data && data.status === 'PAID') {
           setPaymentStatus('PAID');
           onUpgradeCompleted(orderId, paymentChannel);
         }
       } catch {
-        // Ignore network errors
+        // Ignore network/HTML fallback errors
       } finally {
         setIsPolling(false);
       }
@@ -294,15 +299,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   }, [isCheckoutOpen, paymentStatus, orderId, paymentChannel, onUpgradeCompleted]);
 
   const handleSimulatePaymentSuccess = async (gateway: string) => {
-    try {
-      await fetch('/api/payment/hybrid-simulate-paid', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId, gateway }),
-      });
-    } catch {
-      // Fallback
-    }
+    await apiHybridSimulatePaid(orderId, gateway);
     setPaymentStatus('PAID');
     onUpgradeCompleted(orderId, gateway);
   };

@@ -567,6 +567,7 @@ export default function App() {
                     linkUrl: scenToUse.linkUrl,
                     linkTitle: scenToUse.linkPreview?.title,
                     photoCount: scenToUse.photoUrls?.length,
+                    photoUrls: scenToUse.photoUrls || [],
                     videoUrl: scenToUse.videoUrl,
                   },
                   firstCommentApplied: resolvedFirstComment,
@@ -659,6 +660,7 @@ export default function App() {
                     groupId: group.id,
                     content: rendered,
                     firstComment: resolvedFirstComment,
+                    photoUrls: scenToUse.photoUrls || [],
                     resultId: resultId,
                   },
                   '*'

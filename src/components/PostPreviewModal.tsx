@@ -130,6 +130,25 @@ export const PostPreviewModal: React.FC<PostPreviewModalProps> = ({ item, onClos
               </div>
             )}
 
+            {item.attachmentMeta?.photoUrls && item.attachmentMeta.photoUrls.length > 0 && (
+              <div
+                className={`mx-4 mb-3 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 grid gap-1 bg-slate-100 dark:bg-slate-800 ${
+                  item.attachmentMeta.photoUrls.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
+                }`}
+              >
+                {item.attachmentMeta.photoUrls.map((photoUrl, idx) => (
+                  <img
+                    key={idx}
+                    src={photoUrl}
+                    alt={`Lampiran Foto #${idx + 1}`}
+                    className={`w-full object-cover ${
+                      item.attachmentMeta?.photoUrls?.length === 1 ? 'max-h-72' : 'h-40'
+                    }`}
+                  />
+                ))}
+              </div>
+            )}
+
             {/* Engagement Stats Bar */}
             <div className="px-4 py-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500">
               <div className="flex items-center gap-1.5">

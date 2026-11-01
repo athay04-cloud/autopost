@@ -1016,6 +1016,14 @@ async function startServer() {
     });
   });
 
+  // Pastikan semua request /api/* yang tidak cocok selalu mengembalikan JSON (bukan HTML SPA fallback)
+  app.use('/api', (req, res) => {
+    res.status(404).json({
+      success: false,
+      message: `Endpoint API tidak ditemukan: ${req.method} ${req.originalUrl}`,
+    });
+  });
+
   // --------------------------------------------------------------------------
   // G. VITE MIDDLEWARE (DEVELOPMENT) ATAU STATIC DIST (PRODUCTION)
   // --------------------------------------------------------------------------

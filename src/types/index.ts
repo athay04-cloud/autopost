@@ -69,6 +69,7 @@ export interface PostResultItem {
     linkUrl?: string;
     linkTitle?: string;
     photoCount?: number;
+    photoUrls?: string[];
     videoUrl?: string;
   };
   firstCommentApplied?: string;

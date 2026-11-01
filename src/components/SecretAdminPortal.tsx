@@ -19,34 +19,21 @@ import {
   ArrowUpRight,
   Zap,
 } from 'lucide-react';
-import { AuthUser } from '../services/paymentAuthService';
+import {
+  AuthUser,
+  QrisTransaction,
+  AdminStats,
+  apiAdminUnlock,
+  apiAdminOverview,
+  apiAdminUpdateUser,
+  apiAdminCreateUser,
+  apiAdminDeleteUser,
+  apiAdminOverrideTransaction,
+  apiAdminRotateKey,
+  apiHybridSimulatePaid,
+} from '../services/paymentAuthService';
 
-interface AdminTransactionItem {
-  orderId: string;
-  userId: string;
-  userEmail: string;
-  planTarget: 'PREMIUM' | 'AGENCY';
-  amount: number;
-  description: string;
-  status: 'PENDING' | 'PAID' | 'EXPIRED';
-  qrContent: string;
-  signatureHeader: string;
-  expiresAt: string;
-  createdAt: string;
-  paidAt?: string;
-}
-
-interface AdminStats {
-  totalUsers: number;
-  proUsers: number;
-  freeUsers: number;
-  totalTransactions: number;
-  paidTransactions: number;
-  pendingTransactions: number;
-  domesticRevenueIdr: number;
-  globalRevenueUsd: number;
-  activeMasterKeyHint: string;
-}
+type AdminTransactionItem = QrisTransaction;
 
 interface SecretAdminPortalProps {
   isOpen: boolean;
@@ -138,19 +125,12 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
       if (!tokenToUse) return;
       setIsLoading(true);
       try {
-        const res = await fetch('/api/admin/overview', {
-          headers: { 'x-admin-token': tokenToUse },
-        });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          setIsUnlocked(true);
-          applyOverviewPayload(data);
-        } else {
-          setIsUnlocked(false);
-          sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-        }
+        const data = await apiAdminOverview(tokenToUse);
+        setIsUnlocked(true);
+        applyOverviewPayload(data);
       } catch {
-        // Ignore network error
+        setIsUnlocked(false);
+        sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
       } finally {
         setIsLoading(false);
       }
@@ -177,25 +157,15 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
           ? { passkey: passkeyInput.trim() }
           : { email: adminEmail.trim(), password: adminPassword };
 
-      const res = await fetch('/api/admin/unlock', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        setAuthError(data.message || 'Gagal membuka kunci Vault Admin.');
-        return;
-      }
-
-      sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, data.adminToken);
-      setAdminToken(data.adminToken);
+      const data = await apiAdminUnlock(payload);
+      const issuedToken = data.adminToken || `admin_vault_${Date.now()}`;
+      sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, issuedToken);
+      setAdminToken(issuedToken);
       setIsUnlocked(true);
       applyOverviewPayload(data);
-      showNotice(`Vault Admin terbuka (${data.unlockedBy}).`);
-    } catch {
-      setAuthError('Gagal menghubungi server autentikasi Admin.');
+      showNotice(`Vault Admin terbuka (${data.unlockedBy || 'ROOT'}).`);
+    } catch (err: any) {
+      setAuthError(err?.message || 'Kunci Rahasia (Master Passkey) atau kredensial Admin salah.');
     } finally {
       setIsLoading(false);
     }
@@ -215,21 +185,11 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
   ) => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/users/update', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': adminToken,
-        },
-        body: JSON.stringify({ userId, ...updates }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        applyOverviewPayload(data);
-        showNotice(data.message);
-      } else {
-        showNotice(data.message || 'Gagal memperbarui user.');
-      }
+      const data = await apiAdminUpdateUser(adminToken, userId, updates);
+      applyOverviewPayload(data);
+      if (data.message) showNotice(data.message);
+    } catch (err: any) {
+      showNotice(err?.message || 'Gagal memperbarui user.');
     } finally {
       setIsLoading(false);
     }
@@ -240,30 +200,20 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
     if (!newFullName.trim() || !newEmail.trim() || !newPassword.trim()) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/users/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': adminToken,
-        },
-        body: JSON.stringify({
-          fullName: newFullName,
-          email: newEmail,
-          password: newPassword,
-          plan: newPlan,
-          role: newRole,
-        }),
+      const data = await apiAdminCreateUser(adminToken, {
+        fullName: newFullName,
+        email: newEmail,
+        password: newPassword,
+        plan: newPlan,
+        role: newRole,
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        applyOverviewPayload(data);
-        setNewFullName('');
-        setNewEmail('');
-        setNewPassword('');
-        showNotice(data.message);
-      } else {
-        showNotice(data.message || 'Gagal membuat user.');
-      }
+      applyOverviewPayload(data);
+      setNewFullName('');
+      setNewEmail('');
+      setNewPassword('');
+      if (data.message) showNotice(data.message);
+    } catch (err: any) {
+      showNotice(err?.message || 'Gagal membuat user.');
     } finally {
       setIsLoading(false);
     }
@@ -272,21 +222,11 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
   const handleDeleteUser = async (userId: string) => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/users/delete', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': adminToken,
-        },
-        body: JSON.stringify({ userId }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        applyOverviewPayload(data);
-        showNotice(data.message);
-      } else {
-        showNotice(data.message || 'Gagal menghapus user.');
-      }
+      const data = await apiAdminDeleteUser(adminToken, userId);
+      applyOverviewPayload(data);
+      if (data.message) showNotice(data.message);
+    } catch (err: any) {
+      showNotice(err?.message || 'Gagal menghapus user.');
     } finally {
       setIsLoading(false);
     }
@@ -298,21 +238,11 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
   ) => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/transactions/override', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': adminToken,
-        },
-        body: JSON.stringify({ orderId, status }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        applyOverviewPayload(data);
-        showNotice(data.message);
-      } else {
-        showNotice(data.message || 'Gagal mengubah status transaksi.');
-      }
+      const data = await apiAdminOverrideTransaction(adminToken, orderId, status);
+      applyOverviewPayload(data);
+      if (data.message) showNotice(data.message);
+    } catch (err: any) {
+      showNotice(err?.message || 'Gagal mengubah status transaksi.');
     } finally {
       setIsLoading(false);
     }
@@ -325,11 +255,7 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
         gateway === 'dana_qris'
           ? `INV-IDR-${Date.now().toString().slice(-6)}`
           : `INV-USD-${Date.now().toString().slice(-6)}`;
-      await fetch('/api/payment/hybrid-simulate-paid', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId, gateway }),
-      });
+      await apiHybridSimulatePaid(orderId, gateway);
       await fetchOverview(adminToken);
       showNotice(`Simulasi transaksi lunas (${orderId}) berhasil dicatat.`);
     } finally {
@@ -342,22 +268,12 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
     if (!newMasterKey.trim()) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/admin/rotate-key', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-token': adminToken,
-        },
-        body: JSON.stringify({ newPasskey: newMasterKey.trim() }),
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        applyOverviewPayload(data);
-        setNewMasterKey('');
-        showNotice(data.message);
-      } else {
-        showNotice(data.message || 'Gagal memperbarui Master Passkey.');
-      }
+      const data = await apiAdminRotateKey(adminToken, newMasterKey.trim());
+      applyOverviewPayload(data);
+      setNewMasterKey('');
+      if (data.message) showNotice(data.message);
+    } catch (err: any) {
+      showNotice(err?.message || 'Gagal memperbarui Master Passkey.');
     } finally {
       setIsLoading(false);
     }
