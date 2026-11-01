@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.0.7',
-        description: 'Ekstensi otomasi posting Facebook Group dalam Mode Headless / Stealth (tanpa membuka tab di jendela kerja Anda dan tanpa mengganggu layar).',
+        version: '1.0.8',
+        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.0.8 (Fix Single-Text Insertion & Anti-Double Post).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -269,11 +269,16 @@ let isQueueBusy = false;
 const recentPostLocks = new Map();
 
 function enqueuePostTask(request, sendResponse) {
-  const lockKey = request.resultId || (request.groupId + "::" + (request.content || "").slice(0, 50));
   const now = Date.now();
-  const prevTime = recentPostLocks.get(lockKey);
-  if (prevTime && now - prevTime < 45000) {
-    console.warn("[Metus Background] Mencegah duplikasi request posting:", lockKey);
+  const resultLockKey = "RES::" + (request.resultId || "");
+  const groupLockKey = "GRP::" + (request.groupId || "");
+
+  const prevResultTime = request.resultId ? recentPostLocks.get(resultLockKey) : 0;
+  const prevGroupTime = request.groupId ? recentPostLocks.get(groupLockKey) : 0;
+
+  // Cegah duplikasi jika resultId yang sama atau groupId yang sama baru saja diproses dalam 60 detik terakhir
+  if ((prevResultTime && now - prevResultTime < 60000) || (prevGroupTime && now - prevGroupTime < 60000)) {
+    console.warn("[Metus Background] Mencegah duplikasi request posting:", resultLockKey, groupLockKey);
     sendResponse({
       success: true,
       postUrl: "https://www.facebook.com/groups/" + request.groupId,
@@ -281,7 +286,9 @@ function enqueuePostTask(request, sendResponse) {
     });
     return;
   }
-  recentPostLocks.set(lockKey, now);
+
+  if (request.resultId) recentPostLocks.set(resultLockKey, now);
+  if (request.groupId) recentPostLocks.set(groupLockKey, now);
 
   postQueue.push({ request, sendResponse });
   processNextPostQueue();
@@ -430,14 +437,22 @@ function waitForFacebookTabReady(tabId, maxWaitMs = 25000) {
 
 // Fungsi Otomasi Komposer Facebook (Dieksekusi langsung di DOM Tab Grup Facebook)
 async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
-  if (window.__metus_has_submitted) {
-    console.warn("[Metus] Post already submitted in this session. Aborting duplicate.");
-    return { success: false, error: "Postingan sudah dikirim sebelumnya pada sesi ini (mencegah duplikasi)." };
+  // Mutex level DOM & Window agar tidak pernah dieksekusi 2x di tab yang sama
+  if (
+    window.__metus_has_submitted ||
+    window.__metus_automation_running ||
+    document.documentElement.getAttribute("data-metus-automation-lock") === "1"
+  ) {
+    console.warn("[Metus] Automation already running or submitted in this tab. Aborting duplicate.");
+    return { success: true, message: "Postingan sudah diproses pada sesi ini (mencegah duplikasi)." };
   }
-  console.log("[Metus Tab Automation v1.0.4] Memulai proses posting ke Facebook group...");
+  window.__metus_automation_running = true;
+  document.documentElement.setAttribute("data-metus-automation-lock", "1");
+
+  console.log("[Metus Tab Automation v1.0.8] Memulai proses posting ke Facebook group (Anti-Triple Text & Anti-Double Post)...");
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-  // Helper untuk memicu event klik realistis yang dikenali oleh React 18 Event Delegation
+  // Helper klik untuk MEMBUKA elemen UI (seperti kotak 'Tulis sesuatu...')
   function triggerRealisticClick(el) {
     if (!el) return;
     try {
@@ -449,6 +464,23 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
     el.dispatchEvent(new MouseEvent("mousedown", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     el.dispatchEvent(new MouseEvent("click", opts));
+  }
+
+  // Helper klik TUNGGAL khusus tombol SUBMIT ('Posting'/'Kirim')
+  // PENTING: Jangan kirim mousedown+mouseup+click bersamaan pada tombol Submit Facebook (CometPressable)
+  // karena CometPressable akan mengeksekusi onPress (dari mouseup) DAN onClick (dari click) = 2x Post!
+  function triggerSingleSubmitClick(btn) {
+    if (!btn) return;
+    try {
+      btn.scrollIntoView({ behavior: "instant", block: "center" });
+      if (typeof btn.focus === "function") btn.focus();
+    } catch (e) {}
+
+    if (typeof btn.click === "function") {
+      btn.click();
+    } else {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    }
   }
 
   // 1. Tangani jika ada modal pop-up "Aturan Grup" atau "Persetujuan" sebelum posting
@@ -726,45 +758,77 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
 
   console.log("[Metus] Editor postingan grup ditemukan:", editor);
 
-  // 7. Fokus dan masukkan teks promosi ke dalam editor Facebook (SEKALI SAJA, ANTI-DUPLIKASI TEKS)
-  editor.focus();
-  triggerRealisticClick(editor);
-  await sleep(500);
+  // 7. Fokus dan masukkan teks promosi ke dalam editor Facebook (MURNI 1X, ANTI "halohalohalo")
+  // Mengapa sebelumnya "halo" menjadi "halohalohalo"?
+  // Karena pada jendela popup background (focused: false), Lexical menunda render DOM (requestAnimationFrame),
+  // sehingga jika 3 metode (execCommand + paste + beforeinput) dijalankan berurutan saat mengecek innerText,
+  // ketiganya masuk ke antrean Lexical dan ter-flush menjadi 3x lipat ("halohalohalo").
+  // SOLUSI: Kunci atribut data-metus-typed dan jalankan HANYA SATU metode (execCommand insertText)!
+  if (editor.getAttribute("data-metus-typed") !== "1") {
+    editor.setAttribute("data-metus-typed", "1");
 
-  // Cek apakah editor sudah berisi teks
-  let currentText = (editor.innerText || editor.textContent || "").trim();
-
-  // Metode 1 (Utama): execCommand insertText (standar Chromium untuk Lexical editor)
-  if (currentText.length === 0) {
     try {
-      document.execCommand("insertText", false, contentToPost);
+      window.focus();
     } catch (e) {}
-    // WAJIB tunggu 650ms agar Lexical selesai merender teks ke DOM sebelum mengecek currentText!
-    // Tanpa jeda ini, pengecekan sinkron akan mengira teks masih kosong lalu menjalankan metode 2, 3, 4 sehingga teks berulang 4x!
-    await sleep(650);
-    currentText = (editor.innerText || editor.textContent || "").trim();
+    editor.focus();
+    try {
+      editor.click();
+    } catch (e) {}
+    await sleep(400);
+
+    // Bersihkan isi editor terlebih dahulu jika ada sisa teks
+    try {
+      document.execCommand("selectAll", false, null);
+      document.execCommand("delete", false, null);
+    } catch (e) {}
+    await sleep(150);
+
+    // Eksekusi TUNGGAL: gunakan execCommand("insertText") 1 kali saja!
+    let insertedOk = false;
+    try {
+      insertedOk = document.execCommand("insertText", false, contentToPost);
+    } catch (e) {
+      insertedOk = false;
+    }
+
+    // HANYA jika browser menolak execCommand (return false), gunakan 1x fallback beforeinput
+    if (!insertedOk) {
+      try {
+        editor.dispatchEvent(
+          new InputEvent("beforeinput", {
+            bubbles: true,
+            cancelable: true,
+            inputType: "insertText",
+            data: contentToPost,
+          })
+        );
+      } catch (e) {}
+    }
+
+    await sleep(900);
+
+    // PENGECEKAN SELF-HEALING: Jika karena alasan apapun teks di DOM terduplikasi (misal "halohalo" atau "halohalohalo"),
+    // otomatis bersihkan dan tulis ulang 1x!
+    const cleanTarget = (contentToPost || "").trim();
+    const currentDomText = (editor.innerText || editor.textContent || "").trim();
+    if (
+      cleanTarget.length > 0 &&
+      currentDomText.length >= cleanTarget.length * 2 &&
+      currentDomText.includes(cleanTarget + cleanTarget)
+    ) {
+      console.warn("[Metus Self-Heal] Terdeteksi teks ganda di editor, menormalkan menjadi 1x...");
+      try {
+        editor.focus();
+        document.execCommand("selectAll", false, null);
+        document.execCommand("delete", false, null);
+        await sleep(150);
+        document.execCommand("insertText", false, contentToPost);
+      } catch (e) {}
+      await sleep(600);
+    }
   }
 
-  // Metode 2 (Fallback): DataTransfer ClipboardEvent paste HANYA jika setelah 650ms metode 1 belum terisi
-  if (currentText.length === 0) {
-    try {
-      const dt = new DataTransfer();
-      dt.setData("text/plain", contentToPost);
-      editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
-    } catch (e) {}
-    await sleep(650);
-    currentText = (editor.innerText || editor.textContent || "").trim();
-  }
-
-  // Metode 3 (Fallback Terakhir): beforeinput event HANYA jika teks masih belum terisi
-  if (currentText.length === 0) {
-    try {
-      editor.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: contentToPost }));
-    } catch (e) {}
-    await sleep(650);
-  }
-
-  await sleep(1200);
+  await sleep(800);
 
   // 8. Cari tombol Posting / Kirim di dalam dialog
   const submitWords = ["posting", "post", "kirim", "publish", "bagikan", "berikutnya", "next"];
@@ -855,7 +919,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
   const btnLabel = (postButton.getAttribute("aria-label") || postButton.innerText || "").toLowerCase();
   if (btnLabel.includes("berikutnya") || btnLabel.includes("next")) {
     console.log("[Metus] Mengklik tombol Berikutnya:", postButton);
-    triggerRealisticClick(postButton);
+    triggerSingleSubmitClick(postButton);
     await sleep(1500);
 
     const dialog = document.querySelector('div[role="dialog"]') || activeContainer;
@@ -873,17 +937,26 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText) {
     };
   }
 
-  if (window.__metus_has_submitted || postButton._submitted) {
+  if (
+    window.__metus_has_submitted ||
+    postButton._submitted ||
+    postButton.getAttribute("data-metus-clicked") === "1" ||
+    document.documentElement.getAttribute("data-metus-submitted") === "1"
+  ) {
     return {
       success: true,
-      message: "Postingan sudah dikirim pada sesi ini."
+      message: "Postingan sudah dikirim pada sesi ini (mencegah double post)."
     };
   }
 
-  console.log("[Metus] Mengklik tombol Posting:", postButton);
+  console.log("[Metus] Mengklik tombol Posting tepat 1x:", postButton);
   postButton._submitted = true;
-  triggerRealisticClick(postButton);
+  postButton.setAttribute("data-metus-clicked", "1");
+  document.documentElement.setAttribute("data-metus-submitted", "1");
   window.__metus_has_submitted = true;
+
+  // Klik TUNGGAL pada tombol Posting agar tidak memicu double-submit pada CometPressable
+  triggerSingleSubmitClick(postButton);
   await sleep(3500);
 
   // 9. Cek verifikasi status postingan
@@ -1129,102 +1202,69 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       if (editor) {
         clearInterval(checkEditor);
-        editor.focus();
-
-        // Bersihkan seleksi lama jika ada
-        try {
-          const sel = window.getSelection();
-          sel.removeAllRanges();
-          const range = document.createRange();
-          range.selectNodeContents(editor);
-          sel.addRange(range);
-        } catch (e) {}
-
-        // Metode 1 (Utama): execCommand insertText (sekali saja tanpa duplikasi)
-        let txtVal = (editor.innerText || editor.textContent || "").trim();
-        if (txtVal.length === 0) {
+        if (editor.getAttribute("data-metus-typed") !== "1") {
+          editor.setAttribute("data-metus-typed", "1");
+          editor.focus();
           try {
+            document.execCommand("selectAll", false, null);
+            document.execCommand("delete", false, null);
             document.execCommand("insertText", false, request.content);
           } catch (e) {}
         }
 
-        // Tunggu 650ms agar Lexical selesai merender ke DOM sebelum cek fallback
+        // Cari tombol posting di dalam dialog & klik tepat 1 kali
         setTimeout(() => {
-          txtVal = (editor.innerText || editor.textContent || "").trim();
-          if (txtVal.length === 0) {
-            try {
-              const dt = new DataTransfer();
-              dt.setData("text/plain", request.content);
-              editor.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData: dt }));
-            } catch (e) {}
+          const submitWords = ['posting', 'post', 'kirim', 'publish', 'bagikan', 'berikutnya', 'next'];
+          const searchContainer = activeContainer || document.querySelector('div[role="dialog"]') || document;
+          const allButtons = Array.from(searchContainer.querySelectorAll('div[role="button"], button'));
+
+          let postBtn = null;
+          for (const b of allButtons) {
+            const aria = (b.getAttribute("aria-label") || "").trim().toLowerCase();
+            if (submitWords.some((w) => aria === w || aria.startsWith(w))) {
+              postBtn = b;
+              break;
+            }
           }
 
-          // 3. Cari tombol posting di dalam dialog
-          setTimeout(() => {
-            const submitWords = ['posting', 'post', 'kirim', 'publish', 'bagikan', 'berikutnya', 'next'];
-            const searchContainer = activeContainer || document.querySelector('div[role="dialog"]') || document;
-            const allButtons = Array.from(searchContainer.querySelectorAll('div[role="button"], button'));
-
-            let postBtn = null;
+          if (!postBtn) {
             for (const b of allButtons) {
-              const aria = (b.getAttribute("aria-label") || "").trim().toLowerCase();
-              if (submitWords.some((w) => aria === w || aria.startsWith(w))) {
-                postBtn = b;
-                break;
-              }
-            }
-
-            if (!postBtn) {
-              for (const b of allButtons) {
-                const txt = (b.innerText || "").trim().toLowerCase();
-                if (submitWords.some((w) => txt === w || txt.startsWith(w) || txt.includes(w))) {
-                  if (!txt.includes("tambahkan") && !txt.includes("tutup") && !txt.includes("batal") && !txt.includes("foto")) {
-                    postBtn = b;
-                    break;
-                  }
+              const txt = (b.innerText || "").trim().toLowerCase();
+              if (submitWords.some((w) => txt === w || txt.startsWith(w) || txt.includes(w))) {
+                if (!txt.includes("tambahkan") && !txt.includes("tutup") && !txt.includes("batal") && !txt.includes("foto")) {
+                  postBtn = b;
+                  break;
                 }
               }
             }
+          }
 
-            if (!postBtn) {
-              for (let idx = allButtons.length - 1; idx >= 0; idx--) {
-                const b = allButtons[idx];
-                const rect = b.getBoundingClientRect();
-                if (rect.width > 110 && rect.height >= 26) {
-                  const aria = (b.getAttribute("aria-label") || "").toLowerCase();
-                  const txt = (b.innerText || "").toLowerCase();
-                  if (!aria.includes("tutup") && !aria.includes("close") && !aria.includes("batal") &&
-                      !txt.includes("tutup") && !txt.includes("batal") && !txt.includes("foto")) {
-                    postBtn = b;
-                    break;
-                  }
-                }
-              }
-            }
+          if (!postBtn) {
+            sendResponse({
+              success: false,
+              error: "Tombol 'Posting' tidak ditemukan di dialog Facebook."
+            });
+            return;
+          }
 
-            if (!postBtn) {
-              sendResponse({
-                success: false,
-                error: "Tombol 'Posting' tidak ditemukan di dialog Facebook."
-              });
-              return;
-            }
+          if (
+            !window.__metus_has_submitted &&
+            document.documentElement.getAttribute("data-metus-submitted") !== "1"
+          ) {
+            window.__metus_has_submitted = true;
+            document.documentElement.setAttribute("data-metus-submitted", "1");
+            postBtn.click();
+          }
 
-            if (!window.__metus_has_submitted) {
-              triggerRealisticClick(postBtn);
-              window.__metus_has_submitted = true;
-            }
-
-            setTimeout(() => {
-              const stillOpen = document.querySelector('div[role="dialog"]');
-              sendResponse({
-                success: true,
-                message: "Post berhasil dikirim ke grup Facebook!",
-                verified: !stillOpen
-              });
-            }, 3000);
-          }, 1500);
-        }, 650);
+          setTimeout(() => {
+            const stillOpen = document.querySelector('div[role="dialog"]');
+            sendResponse({
+              success: true,
+              message: "Post berhasil dikirim ke grup Facebook!",
+              verified: !stillOpen
+            });
+          }, 3000);
+        }, 1200);
 
       } else if (attempts >= maxAttempts) {
         clearInterval(checkEditor);
@@ -1243,15 +1283,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   {
     name: 'dashboard_bridge.js',
     description: 'Content script yang menyuntikkan data grup tersimpan langsung ke Web Dashboard athay04-cloud.github.io',
-    content: `// Metus Extension Bridge untuk Dashboard (Singleton Guard)
-if (!window.__metus_dashboard_bridge_loaded) {
+    content: `// Metus Extension Bridge v1.0.8 untuk Dashboard (DOM-Level Cross-Extension Singleton Guard)
+// Menggunakan atribut pada document.documentElement agar meskipun ada >1 ekstensi atau injeksi berulang,
+// HANYA 1 instance bridge yang aktif dan TIDAK AKAN PERNAH mengirim perintah posting 2 kali!
+if (
+  !window.__metus_dashboard_bridge_loaded &&
+  document.documentElement.getAttribute("data-metus-bridge-active") !== "1"
+) {
   window.__metus_dashboard_bridge_loaded = true;
-  console.log("[Metus Bridge] Connecting extension data to Web Dashboard...");
+  document.documentElement.setAttribute("data-metus-bridge-active", "1");
+  document.documentElement.setAttribute("data-metus-bridge-version", "1.0.8");
+  console.log("[Metus Bridge v1.0.8] Connecting extension data to Web Dashboard (Anti-Double Post Lock Active)...");
 
   // Ambil sesi & grup tersimpan dari background
   chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
     if (data && data.groups && data.groups.length > 0) {
-      console.log("[Metus Bridge] Menemukan " + data.groups.length + " grup untuk disinkronkan ke web!");
       window.postMessage({
         type: "METUS_EXTENSION_SYNC",
         userId: data.userId,
@@ -1264,7 +1310,9 @@ if (!window.__metus_dashboard_bridge_loaded) {
 
   // Listener dari halaman web jika web meminta sinkronisasi ulang atau kirim post nyata
   window.addEventListener("message", (event) => {
-    if (event.data && event.data.type === "METUS_REQUEST_SYNC") {
+    if (!event.data) return;
+
+    if (event.data.type === "METUS_REQUEST_SYNC") {
       chrome.runtime.sendMessage({ action: "FETCH_MY_GROUPS" }, (res) => {
         window.postMessage({
           type: "METUS_EXTENSION_SYNC",
@@ -1274,29 +1322,49 @@ if (!window.__metus_dashboard_bridge_loaded) {
       });
     }
 
-    // Kirim perintah posting nyata ke Facebook via background worker (Anti-duplikasi resultId)
-    if (event.data && event.data.type === "METUS_DISPATCH_POST") {
-      const rId = event.data.resultId;
-      if (rId && dispatchedResultIds.has(rId)) {
+    // Kirim perintah posting nyata ke Facebook via background worker (Kunci DOM Lintas-Ekstensi)
+    if (event.data.type === "METUS_DISPATCH_POST" || event.data.type === "METUS_DISPATCH_POST_V2") {
+      const rId = event.data.resultId || "";
+      const grpId = event.data.groupId || "";
+      const domResultLockAttr = "data-metus-lock-res-" + rId;
+      const domGroupLockAttr = "data-metus-lock-grp-" + grpId;
+
+      // 1. Cek kunci memori lokal & kunci DOM global
+      if (rId && (dispatchedResultIds.has(rId) || document.documentElement.getAttribute(domResultLockAttr) === "1")) {
+        console.warn("[Metus Bridge] Mencegah duplikasi dispatch untuk resultId:", rId);
         return;
       }
-      if (rId) dispatchedResultIds.add(rId);
+
+      const lastGroupTime = Number(document.documentElement.getAttribute(domGroupLockAttr) || "0");
+      if (grpId && lastGroupTime > 0 && Date.now() - lastGroupTime < 45000) {
+        console.warn("[Metus Bridge] Mencegah duplikasi dispatch ke grup yang sama dalam <45s:", grpId);
+        return;
+      }
+
+      // 2. Pasang kunci ke DOM secara sinkron sebelum mengirim pesan ke background
+      if (rId) {
+        dispatchedResultIds.add(rId);
+        document.documentElement.setAttribute(domResultLockAttr, "1");
+      }
+      if (grpId) {
+        document.documentElement.setAttribute(domGroupLockAttr, String(Date.now()));
+      }
 
       chrome.runtime.sendMessage({
         action: "EXECUTE_POST",
         resultId: rId,
-        groupId: event.data.groupId,
+        groupId: grpId,
         content: event.data.content,
         firstComment: event.data.firstComment,
       }, (res) => {
         window.postMessage({
           type: "METUS_POST_COMPLETED",
-          groupId: event.data.groupId,
+          groupId: grpId,
           resultId: rId,
           success: !!(res && res.success),
           error: res?.error,
           message: res?.message,
-          postUrl: res?.postUrl || ("https://www.facebook.com/groups/" + event.data.groupId),
+          postUrl: res?.postUrl || ("https://www.facebook.com/groups/" + grpId),
         }, "*");
       });
     }

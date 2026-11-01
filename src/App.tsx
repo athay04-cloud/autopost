@@ -306,7 +306,9 @@ export default function App() {
 
   // Posting runner state
   const [isPosting, setIsPosting] = React.useState(false);
+  const isPostingRef = React.useRef<boolean>(false);
   const abortControllerRef = React.useRef<boolean>(false);
+  const dispatchedPostIdsRef = React.useRef<Set<string>>(new Set());
 
   const addLog = (level: 'info' | 'success' | 'warn' | 'error', message: string) => {
     setLogs((prev) => [
@@ -465,27 +467,38 @@ export default function App() {
     addLog('warn', 'Koneksi akun Chrome diputuskan. Kembali ke database simulasi.');
   };
 
-  // Mock Posting Runner with Threading & Delay Randomizer
+  // Posting Runner with Threading, Delay Randomizer & Anti-Double-Post Mutex
   const handleStartPosting = async () => {
+    if (isPostingRef.current) {
+      return;
+    }
     if (selectedGroupIds.length === 0) {
       addLog('warn', 'Tidak ada grup target yang dipilih! Pilih minimal 1 grup.');
       return;
     }
 
+    isPostingRef.current = true;
     setIsPosting(true);
     abortControllerRef.current = false;
 
+    // Filter & deduplicate target group objects by ID so a group is never queued twice
+    const seenGroupIds = new Set<string>();
+    const targetGroups = groups.filter((g) => {
+      if (!selectedGroupIds.includes(g.id)) return false;
+      if (seenGroupIds.has(g.id)) return false;
+      seenGroupIds.add(g.id);
+      return true;
+    });
+
     addLog(
       'info',
-      `Memulai otomasi: ${selectedGroupIds.length} grup target, ${executionParams.threadCount} threads simultan, jeda acak ${executionParams.delayMinSeconds}-${executionParams.delayMaxSeconds}s.`
+      `Memulai otomasi: ${targetGroups.length} grup target unik, ${executionParams.threadCount} threads simultan, jeda acak ${executionParams.delayMinSeconds}-${executionParams.delayMaxSeconds}s.`
     );
 
-    // Filter target group objects
-    const targetGroups = groups.filter((g) => selectedGroupIds.includes(g.id));
-
     // Initialize queued results
+    const batchTimestamp = Date.now();
     const initialResults: PostResultItem[] = targetGroups.map((group, idx) => ({
-      id: `post_res_${group.id}_${Date.now()}`,
+      id: `post_res_${group.id}_${batchTimestamp}_${idx}`,
       groupId: group.id,
       groupName: group.name,
       identityName: activeIdentity.name,
@@ -632,10 +645,17 @@ export default function App() {
                 resolve(res);
               });
 
+              if (dispatchedPostIdsRef.current.has(resultId)) {
+                return;
+              }
+              dispatchedPostIdsRef.current.add(resultId);
+
               try {
+                const isV2Bridge =
+                  document.documentElement.getAttribute('data-metus-bridge-version') === '1.0.8';
                 window.postMessage(
                   {
-                    type: 'METUS_DISPATCH_POST',
+                    type: isV2Bridge ? 'METUS_DISPATCH_POST_V2' : 'METUS_DISPATCH_POST',
                     groupId: group.id,
                     content: rendered,
                     firstComment: resolvedFirstComment,
@@ -735,6 +755,7 @@ export default function App() {
 
     await Promise.all(threadPromises);
 
+    isPostingRef.current = false;
     setIsPosting(false);
     if (!abortControllerRef.current) {
       addLog('success', 'Semua antrean postingan selesai diproses!');
@@ -745,6 +766,7 @@ export default function App() {
 
   const handleStopPosting = () => {
     abortControllerRef.current = true;
+    isPostingRef.current = false;
     setIsPosting(false);
     addLog('warn', 'Menghentikan thread posting...');
   };

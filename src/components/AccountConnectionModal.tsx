@@ -234,13 +234,13 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/20 text-white">
                       Manifest V3 Ready
                     </span>
-                    <span className="text-xs opacity-90 font-medium">Versi 1.0.6 (Mode Headless Stealth & Anti-Duplikasi)</span>
+                    <span className="text-xs opacity-90 font-medium">Versi 1.0.8 (Fix 1x Ketik Teks & Anti-Double Post)</span>
                   </div>
                   <h3 className="text-lg font-bold">
                     metus-auto-post-chrome-extension.zip
                   </h3>
                   <p className="text-xs text-white/80 max-w-md">
-                    Berisi berkas lengkap <code>manifest.json</code>, <code>background.js</code>, <code>content.js</code>, <code>headless-poster.js</code>, dan panduan instalasi.
+                    Berisi berkas lengkap <code>manifest.json</code>, <code>background.js</code>, <code>content.js</code>, <code>dashboard_bridge.js</code>, dan <code>headless-poster.js</code>.
                   </p>
                 </div>
 
@@ -263,24 +263,26 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                   ) : (
                     <>
                       <Download className="w-4 h-4 text-blue-600" />
-                      <span>Download ZIP (Siap Pakai)</span>
+                      <span>Download ZIP v1.0.8 (Terbaru)</span>
                     </>
                   )}
                 </button>
               </div>
 
-              {/* Headless & Chromeless Feature Callout */}
+              {/* Headless & Anti-Duplicate Fix Callout */}
               <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/60 dark:bg-emerald-950/20 flex items-start gap-3">
                 <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs space-y-1">
                   <div className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
-                    <span>⚡ Mode Headless / Stealth (Chromeless) Aktif</span>
-                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">100% Senyap</span>
+                    <span>⚡ Pembaruan v1.0.8: Fix Teks "halohalohalo" & Fix Double Post</span>
+                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">Single-Shot Lexical</span>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
-                    <strong>Tanpa New Tab di Jendela Aktif:</strong> Ekstensi kini bekerja di jendela popup stealth yang diminimalkan dan diposisikan di luar batas layar (off-screen). Tab bar browser Anda tetap 100% bersih tanpa ada tab baru yang muncul.
+                    <strong>1. Fix Teks Berulang 3x ("halohalohalo"):</strong> Menghapus fallback 3-lapis (execCommand + paste + beforeinput) yang mengantre 3x di Lexical saat jendela background tidak fokus. Kini injeksi teks dikunci 1x + dilengkapi <em>Self-Healing</em> otomatis.
                     <br />
-                    <strong>Pilihan CLI Murni:</strong> Bagi yang menginginkan mode 100% terminal tanpa membuka browser sama sekali, gunakan berkas <code>headless-poster.js</code> yang sudah disertakan di dalam file ZIP!
+                    <strong>2. Fix Kirim 2 Kali (Double Post):</strong> Mengganti event <code>mousedown+mouseup+click</code> pada tombol Kirim Facebook (<code>CometPressable</code>) menjadi 1x klik tunggal, serta memasang <em>DOM Mutex Lock</em> lintas ekstensi.
+                    <br />
+                    <strong>PENTING:</strong> Setelah mengunduh ZIP v1.0.8 ini, buka <code>chrome://extensions</code>, <strong>Remove (Hapus)</strong> ekstensi Metus versi lama terlebih dahulu, lalu klik <strong>Load unpacked</strong> pada folder v1.0.8 baru dan <strong>Refresh halaman Dashboard ini</strong>.
                   </div>
                 </div>
               </div>

@@ -136,10 +136,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });`;
     } else {
-      // Default: fb_autopost or blank
+      // Default: fb_autopost or blank (Stealth Popup & Single-Shot Lexical Insertion)
       backgroundJs = `// Background Service Worker - ${extName}
 // Versi: ${extVersion} | Pembuat: ${extAuthor}
 console.log("[${extName}] Service Worker aktif.");
+
+const recentLocks = new Map();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "PING") {
@@ -148,17 +150,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "AUTO_POST_GROUP") {
-    console.log("Membuka grup FB untuk posting:", request.groupId);
-    chrome.tabs.create({ url: "https://www.facebook.com/groups/" + request.groupId }, (tab) => {
-      chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-        if (tabId === tab.id && info.status === "complete") {
+    const lockKey = request.groupId + "::" + (request.postText || "").slice(0, 30);
+    if (recentLocks.has(lockKey) && Date.now() - recentLocks.get(lockKey) < 60000) {
+      sendResponse({ success: true, message: "Mencegah duplikasi posting." });
+      return true;
+    }
+    recentLocks.set(lockKey, Date.now());
+
+    chrome.windows.create({
+      url: "https://www.facebook.com/groups/" + request.groupId,
+      focused: false,
+      type: "popup",
+      width: 860,
+      height: 680
+    }, (win) => {
+      const tabId = win && win.tabs && win.tabs[0] ? win.tabs[0].id : null;
+      if (!tabId) return;
+      chrome.tabs.onUpdated.addListener(function listener(updatedTabId, info) {
+        if (updatedTabId === tabId && info.status === "complete") {
           chrome.tabs.onUpdated.removeListener(listener);
-          // Jalankan injeksi posting setelah halaman termuat
           setTimeout(() => {
-            chrome.tabs.sendMessage(tab.id, {
+            chrome.tabs.sendMessage(tabId, {
               action: "INJECT_POST_CONTENT",
               text: request.postText
-            }, sendResponse);
+            }, (res) => {
+              sendResponse(res);
+              if (win && win.id) {
+                setTimeout(() => { try { chrome.windows.remove(win.id); } catch (e) {} }, 2500);
+              }
+            });
           }, 3500);
         }
       });
@@ -173,21 +193,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (extTemplate === 'fb_cookie_extractor') {
       contentJs = `// Content script tidak diperlukan untuk cookie extractor.`;
     } else {
-      contentJs = `// Content Script - ${extName}
+      contentJs = `// Content Script - ${extName} (Anti-Triple Text & Anti-Double Post)
 console.log("[${extName}] Script disuntikkan ke Facebook.");
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "INJECT_POST_CONTENT") {
+    if (document.documentElement.getAttribute("data-metus-lock") === "1") {
+      sendResponse({ success: true, message: "Sudah diproses." });
+      return true;
+    }
+    document.documentElement.setAttribute("data-metus-lock", "1");
+
     const trigger = document.querySelector('[aria-label="Tulis sesuatu..."]') ||
                     document.querySelector('[aria-label="Write something..."]');
     if (trigger) trigger.click();
 
     setTimeout(() => {
-      const editor = document.querySelector('[role="textbox"][contenteditable="true"]');
-      if (editor) {
+      const dialog = document.querySelector('div[role="dialog"]') || document;
+      const editor = dialog.querySelector('[role="textbox"][contenteditable="true"]');
+      if (editor && editor.getAttribute("data-metus-typed") !== "1") {
+        editor.setAttribute("data-metus-typed", "1");
         editor.focus();
+        document.execCommand("selectAll", false, null);
+        document.execCommand("delete", false, null);
         document.execCommand("insertText", false, request.text);
-        sendResponse({ success: true, message: "Teks berhasil dimasukkan!" });
+        setTimeout(() => {
+          const postBtn = dialog.querySelector('[aria-label="Posting"], [aria-label="Post"], [aria-label="Kirim"]');
+          if (postBtn && postBtn.getAttribute("data-metus-clicked") !== "1") {
+            postBtn.setAttribute("data-metus-clicked", "1");
+            postBtn.click();
+          }
+          sendResponse({ success: true, message: "Teks berhasil dimasukkan dan dikirim 1x!" });
+        }, 1200);
       } else {
         sendResponse({ success: false, message: "Editor Facebook tidak ditemukan." });
       }
