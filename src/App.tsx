@@ -652,11 +652,22 @@ export default function App() {
               dispatchedPostIdsRef.current.add(resultId);
 
               try {
-                const isV2Bridge =
-                  document.documentElement.getAttribute('data-metus-bridge-version') === '1.0.8';
+                const bridgeVer =
+                  document.documentElement.getAttribute('data-metus-bridge-version') || '';
+                const isModernBridge = bridgeVer === '1.0.9' || bridgeVer === '1.0.8';
+                if (
+                  scenToUse.photoUrls &&
+                  scenToUse.photoUrls.length > 0 &&
+                  bridgeVer !== '1.0.9'
+                ) {
+                  addLog(
+                    'warn',
+                    `[Thread #${workerId}] PERINGATAN: Anda melampirkan ${scenToUse.photoUrls.length} foto, tetapi Ekstensi Chrome yang aktif masih versi lama (${bridgeVer || 'v1.0.7/v1.0.8'}). Unduh & muat ulang Ekstensi v1.0.9 agar foto ikut ter-posting ke Facebook!`
+                  );
+                }
                 window.postMessage(
                   {
-                    type: isV2Bridge ? 'METUS_DISPATCH_POST_V2' : 'METUS_DISPATCH_POST',
+                    type: isModernBridge ? 'METUS_DISPATCH_POST_V2' : 'METUS_DISPATCH_POST',
                     groupId: group.id,
                     content: rendered,
                     firstComment: resolvedFirstComment,

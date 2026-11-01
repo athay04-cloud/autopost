@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.0.8',
-        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.0.8 (Fix Single-Text Insertion & Anti-Double Post).',
+        version: '1.0.9',
+        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.0.9 (Support Upload Foto Anti-CSP, Single-Text & Anti-Double Post).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -372,11 +372,37 @@ async function executeSingleFacebookGroupPost(request) {
     // 2. Beri waktu 3.5 detik agar React dan feed Facebook selesai mounting komponen
     await new Promise((r) => setTimeout(r, 3500));
 
+    // 2b. Konversi URL foto eksternal (http/https) ke Base64 DataURL di Service Worker
+    // agar tidak diblokir oleh Content-Security-Policy (CSP) halaman Facebook
+    const rawPhotoUrls = Array.isArray(request.photoUrls) ? request.photoUrls : [];
+    const safeDataUrls = [];
+    for (let i = 0; i < rawPhotoUrls.length; i++) {
+      const item = rawPhotoUrls[i];
+      if (!item || typeof item !== "string") continue;
+      if (item.startsWith("data:image/")) {
+        safeDataUrls.push(item);
+      } else if (item.startsWith("http://") || item.startsWith("https://")) {
+        try {
+          const resp = await fetch(item);
+          const blob = await resp.blob();
+          const base64Url = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : "");
+            reader.onerror = () => resolve("");
+            reader.readAsDataURL(blob);
+          });
+          if (base64Url) safeDataUrls.push(base64Url);
+        } catch (fetchErr) {
+          console.warn("[Metus Background] Gagal mengunduh foto eksternal:", fetchErr);
+        }
+      }
+    }
+
     // 3. Jalankan otomasi DOM posting langsung di dalam konteks tab Facebook di background
     const execResults = await chrome.scripting.executeScript({
       target: { tabId: tabId },
       func: executeFacebookPostAutomation,
-      args: [request.content, request.firstComment || "", Array.isArray(request.photoUrls) ? request.photoUrls : []]
+      args: [request.content, request.firstComment || "", safeDataUrls]
     });
 
     const result = execResults?.[0]?.result || {
@@ -449,8 +475,34 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   window.__metus_automation_running = true;
   document.documentElement.setAttribute("data-metus-automation-lock", "1");
 
-  console.log("[Metus Tab Automation v1.0.8] Memulai proses posting ke Facebook group (Anti-Triple Text & Anti-Double Post)...");
+  console.log("[Metus Tab Automation v1.0.9] Memulai proses posting ke Facebook group (Support Foto Anti-CSP, Anti-Triple Text & Anti-Double Post)...");
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  // Helper konversi DataURL (data:image/...) ke File secara sinkron TANPA fetch()
+  // (Penting: fetch("data:...") diblokir oleh Content-Security-Policy Facebook!)
+  function dataUrlToFile(dataUrl, index) {
+    try {
+      if (!dataUrl || typeof dataUrl !== "string" || !dataUrl.startsWith("data:")) return null;
+      const parts = dataUrl.split(",");
+      if (parts.length < 2) return null;
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      const mime = (mimeMatch && mimeMatch[1]) ? mimeMatch[1] : "image/jpeg";
+      const ext = (mime.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "") || "jpg";
+      const bstr = atob(parts[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      return new File([u8arr], "metus_photo_" + (index + 1) + "." + ext, {
+        type: mime,
+        lastModified: Date.now()
+      });
+    } catch (err) {
+      console.warn("[Metus] Gagal decode Base64 foto ke File:", err);
+      return null;
+    }
+  }
 
   // Helper klik untuk MEMBUKA elemen UI (seperti kotak 'Tulis sesuatu...')
   function triggerRealisticClick(el) {
@@ -759,11 +811,6 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   console.log("[Metus] Editor postingan grup ditemukan:", editor);
 
   // 7. Fokus dan masukkan teks promosi ke dalam editor Facebook (MURNI 1X, ANTI "halohalohalo")
-  // Mengapa sebelumnya "halo" menjadi "halohalohalo"?
-  // Karena pada jendela popup background (focused: false), Lexical menunda render DOM (requestAnimationFrame),
-  // sehingga jika 3 metode (execCommand + paste + beforeinput) dijalankan berurutan saat mengecek innerText,
-  // ketiganya masuk ke antrean Lexical dan ter-flush menjadi 3x lipat ("halohalohalo").
-  // SOLUSI: Kunci atribut data-metus-typed dan jalankan HANYA SATU metode (execCommand insertText)!
   if (editor.getAttribute("data-metus-typed") !== "1") {
     editor.setAttribute("data-metus-typed", "1");
 
@@ -828,44 +875,209 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     }
   }
 
-  await sleep(800);
+  await sleep(700);
 
-  // 7b. Jika ada lampiran foto (photoUrls), konversi ke File & lampirkan via input[type="file"] atau DataTransfer
+  // 7b. LAMPIRKAN FOTO KE DIALOG FACEBOOK (ANTI-CSP, MULTI-METHOD + TUNGGU UPLOAD SELESAI)
   if (Array.isArray(photoUrls) && photoUrls.length > 0) {
+    console.log("[Metus Photo Engine] Menyiapkan " + photoUrls.length + " foto untuk diunggah ke postingan...");
     try {
       const dt = new DataTransfer();
       for (let i = 0; i < photoUrls.length; i++) {
-        const src = photoUrls[i];
-        if (!src) continue;
-        const resp = await fetch(src);
-        const blob = await resp.blob();
-        const ext = (blob.type.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "");
-        const file = new File([blob], "metus_photo_" + (i + 1) + "." + ext, {
-          type: blob.type || "image/jpeg"
-        });
-        dt.items.add(file);
+        const fileObj = dataUrlToFile(photoUrls[i], i);
+        if (fileObj) {
+          dt.items.add(fileObj);
+        }
       }
 
       if (dt.files.length > 0) {
-        const searchRoot = activeContainer || document.querySelector('div[role="dialog"]') || document;
-        let fileInput = searchRoot.querySelector('input[type="file"][accept*="image"], input[type="file"]');
-        if (!fileInput) {
-          fileInput = document.querySelector('div[role="dialog"] input[type="file"], input[type="file"][accept*="image"]');
+        const dialogScope = activeContainer || document.querySelector('div[role="dialog"]') || document;
+
+        // Fungsi cek apakah preview foto sudah masuk ke dalam dialog Facebook
+        const hasPhotoPreviewInDialog = () => {
+          const dlg = document.querySelector('div[role="dialog"]') || activeContainer || document;
+          // Cek gambar blob preview yang dibuat Facebook saat foto berhasil dipilih
+          const blobImgs = dlg.querySelectorAll('img[src^="blob:"], img[src^="data:"]');
+          if (blobImgs.length > 0) return true;
+          // Cek tombol hapus/edit media yang muncul di atas preview foto Facebook
+          const mediaControls = dlg.querySelectorAll(
+            '[aria-label*="Hapus foto" i], [aria-label*="Remove photo" i], [aria-label*="Edit foto" i], [aria-label*="Edit photo" i], [aria-label*="Tambahkan Foto/Video" i], [aria-label*="Add Photos/Videos" i]'
+          );
+          return mediaControls.length > 0;
+        };
+
+        // Fungsi setter files React-compatible pada elemen <input type="file">
+        const assignFilesToInput = (inputEl) => {
+          if (!inputEl) return false;
+          try {
+            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "files")?.set;
+            if (nativeSetter) {
+              nativeSetter.call(inputEl, dt.files);
+            } else {
+              inputEl.files = dt.files;
+            }
+            inputEl.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+            inputEl.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+            return true;
+          } catch (e) {
+            console.warn("[Metus Photo Engine] Gagal set input.files:", e);
+            return false;
+          }
+        };
+
+        // TAHAP 1: Cari <input type="file"> yang menerima gambar di dalam dialog
+        const findBestFileInput = () => {
+          const dlg = document.querySelector('div[role="dialog"]') || activeContainer || document;
+          const dialogInputs = Array.from(dlg.querySelectorAll('input[type="file"]'));
+          // Prioritaskan input file yang memiliki atribut accept*="image"
+          const imgInput = dialogInputs.find((inp) => (inp.getAttribute("accept") || "").includes("image"));
+          if (imgInput) return imgInput;
+          if (dialogInputs.length > 0) return dialogInputs[dialogInputs.length - 1];
+
+          // Fallback cari di seluruh dokumen
+          const allInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+          return allInputs.find((inp) => (inp.getAttribute("accept") || "").includes("image")) || allInputs[0] || null;
+        };
+
+        let targetInput = findBestFileInput();
+
+        // Jika input file belum di-mount oleh Facebook, klik tombol "Foto/video" di dalam dialog
+        // sambil meng-intercept HTMLInputElement.prototype.click agar jendela file OS TIDAK muncul!
+        if (!targetInput) {
+          let capturedInput = null;
+          const origClick = HTMLInputElement.prototype.click;
+          HTMLInputElement.prototype.click = function () {
+            if (this && this.type === "file") {
+              capturedInput = this;
+              return;
+            }
+            return origClick.apply(this, arguments);
+          };
+
+          try {
+            const photoBtnSelectors = [
+              'div[aria-label="Foto/video"]',
+              'div[aria-label="Photo/video"]',
+              'div[aria-label*="Foto/video" i]',
+              'div[aria-label*="Photo/video" i]',
+              'div[aria-label*="Tambahkan foto" i]',
+              'div[aria-label*="Add photo" i]'
+            ];
+            let photoBtn = null;
+            for (const sel of photoBtnSelectors) {
+              photoBtn = dialogScope.querySelector(sel) || document.querySelector('div[role="dialog"] ' + sel);
+              if (photoBtn) break;
+            }
+
+            if (!photoBtn) {
+              const allDlgBtns = Array.from(dialogScope.querySelectorAll('div[role="button"], span'));
+              photoBtn = allDlgBtns.find((b) => {
+                const t = (b.innerText || b.getAttribute("aria-label") || "").trim().toLowerCase();
+                return t === "foto/video" || t === "photo/video" || t === "tambahkan foto/video" || t === "add photos/videos";
+              });
+            }
+
+            if (photoBtn) {
+              console.log("[Metus Photo Engine] Membuka dropzone Foto/Video di dalam dialog:", photoBtn);
+              triggerRealisticClick(photoBtn.closest('div[role="button"]') || photoBtn);
+              await sleep(1000);
+            }
+          } finally {
+            HTMLInputElement.prototype.click = origClick;
+          }
+
+          targetInput = capturedInput || findBestFileInput();
         }
-        if (fileInput) {
-          fileInput.files = dt.files;
-          fileInput.dispatchEvent(new Event("change", { bubbles: true }));
-          fileInput.dispatchEvent(new Event("input", { bubbles: true }));
-          await sleep(2500);
-        } else if (editor) {
-          const pasteEvt = new ClipboardEvent("paste", {
-            bubbles: true,
-            cancelable: true,
-            clipboardData: dt
-          });
-          editor.dispatchEvent(pasteEvt);
-          await sleep(2500);
+
+        // Eksekusi pengisian file ke <input type="file">
+        if (targetInput) {
+          console.log("[Metus Photo Engine] Menyuntikkan file foto ke <input type='file'>:", targetInput);
+          assignFilesToInput(targetInput);
+          await sleep(1800);
         }
+
+        // TAHAP 2: Jika preview foto belum muncul, klik tombol "Foto/video" untuk membuka area dropzone lalu suntik ulang
+        if (!hasPhotoPreviewInDialog()) {
+          let capturedInput2 = null;
+          const origClick2 = HTMLInputElement.prototype.click;
+          HTMLInputElement.prototype.click = function () {
+            if (this && this.type === "file") {
+              capturedInput2 = this;
+              return;
+            }
+            return origClick2.apply(this, arguments);
+          };
+
+          try {
+            const dlg = document.querySelector('div[role="dialog"]') || activeContainer || document;
+            const photoBtn =
+              dlg.querySelector('div[aria-label*="Foto/video" i], div[aria-label*="Photo/video" i]') ||
+              Array.from(dlg.querySelectorAll('div[role="button"]')).find((b) => {
+                const l = (b.getAttribute("aria-label") || b.innerText || "").toLowerCase();
+                return l.includes("foto/video") || l.includes("photo/video") || l.includes("tambahkan foto");
+              });
+            if (photoBtn) {
+              triggerRealisticClick(photoBtn);
+              await sleep(1000);
+            }
+          } finally {
+            HTMLInputElement.prototype.click = origClick2;
+          }
+
+          const secondInput = capturedInput2 || findBestFileInput();
+          if (secondInput) {
+            assignFilesToInput(secondInput);
+            await sleep(1800);
+          }
+        }
+
+        // TAHAP 3: Fallback ClipboardEvent("paste") langsung ke Lexical Editor jika preview belum muncul
+        if (!hasPhotoPreviewInDialog() && editor) {
+          console.log("[Metus Photo Engine] Menjalankan fallback ClipboardEvent paste ke editor...");
+          try {
+            editor.focus();
+            const pasteEvt = new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: dt
+            });
+            editor.dispatchEvent(pasteEvt);
+            await sleep(2000);
+          } catch (pasteErr) {
+            console.warn("[Metus Photo Engine] Paste fallback warning:", pasteErr);
+          }
+        }
+
+        // TAHAP 4: Fallback Drag & Drop ke dropzone / editor
+        if (!hasPhotoPreviewInDialog()) {
+          console.log("[Metus Photo Engine] Menjalankan fallback DragEvent drop ke dialog...");
+          try {
+            const dropTarget = editor || activeContainer || document.querySelector('div[role="dialog"]');
+            if (dropTarget) {
+              dropTarget.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt }));
+              dropTarget.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
+              dropTarget.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+              await sleep(2000);
+            }
+          } catch (dropErr) {
+            console.warn("[Metus Photo Engine] Drop fallback warning:", dropErr);
+          }
+        }
+
+        // TAHAP 5: TUNGGU PROSES UPLOAD FOTO FACEBOOK SELESAI SEBELUM KLIK POSTING
+        // Facebook mengunggah binary foto ke server terlebih dahulu. Selama upload berlangsung,
+        // tombol 'Posting' akan nonaktif (aria-disabled="true") atau ada [role="progressbar"].
+        console.log("[Metus Photo Engine] Menunggu Facebook menyelesaikan upload foto...");
+        for (let waitIdx = 0; waitIdx < 20; waitIdx++) {
+          const dlg = document.querySelector('div[role="dialog"]') || activeContainer || document;
+          const progressBars = dlg.querySelectorAll('[role="progressbar"]');
+          const isUploading = progressBars.length > 0;
+          if (!isUploading && waitIdx >= 3) {
+            break;
+          }
+          await sleep(750);
+        }
+        // Tambahan jeda stabilisasi 2.2 detik agar ID foto terikat penuh pada draft postingan
+        await sleep(2200);
       }
     } catch (photoErr) {
       console.warn("[Metus] Gagal melampirkan foto otomatis:", photoErr);
@@ -930,7 +1142,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   }
 
   let postButton = null;
-  for (let attempt = 0; attempt < 15; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     const searchArea = activeContainer || document.querySelector('div[role="dialog"]') || document.querySelector('div[aria-modal="true"]');
     postButton = findSubmitButton(searchArea);
 
@@ -947,7 +1159,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     try {
       editor.dispatchEvent(new Event("input", { bubbles: true }));
     } catch (e) {}
-    await sleep(600);
+    await sleep(650);
   }
 
   if (!postButton) {
@@ -975,7 +1187,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   if (isStillDisabled) {
     return {
       success: false,
-      error: "Tombol 'Posting' tetap non-aktif. Teks postingan belum divalidasi oleh Facebook."
+      error: "Tombol 'Posting' tetap non-aktif. Pastikan teks atau foto telah selesai diunggah oleh Facebook."
     };
   }
 
@@ -1325,17 +1537,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   {
     name: 'dashboard_bridge.js',
     description: 'Content script yang menyuntikkan data grup tersimpan langsung ke Web Dashboard athay04-cloud.github.io',
-    content: `// Metus Extension Bridge v1.0.8 untuk Dashboard (DOM-Level Cross-Extension Singleton Guard)
+    content: `// Metus Extension Bridge v1.0.9 untuk Dashboard (DOM-Level Cross-Extension Singleton Guard + Photo Upload Support)
 // Menggunakan atribut pada document.documentElement agar meskipun ada >1 ekstensi atau injeksi berulang,
 // HANYA 1 instance bridge yang aktif dan TIDAK AKAN PERNAH mengirim perintah posting 2 kali!
 if (
   !window.__metus_dashboard_bridge_loaded &&
-  document.documentElement.getAttribute("data-metus-bridge-active") !== "1"
+  document.documentElement.getAttribute("data-metus-bridge-version") !== "1.0.9"
 ) {
   window.__metus_dashboard_bridge_loaded = true;
   document.documentElement.setAttribute("data-metus-bridge-active", "1");
-  document.documentElement.setAttribute("data-metus-bridge-version", "1.0.8");
-  console.log("[Metus Bridge v1.0.8] Connecting extension data to Web Dashboard (Anti-Double Post Lock Active)...");
+  document.documentElement.setAttribute("data-metus-bridge-version", "1.0.9");
+  console.log("[Metus Bridge v1.0.9] Connecting extension data to Web Dashboard (Photo Upload & Anti-Double Post Lock Active)...");
 
   // Ambil sesi & grup tersimpan dari background
   chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
@@ -1344,6 +1556,7 @@ if (
         type: "METUS_EXTENSION_SYNC",
         userId: data.userId,
         groups: data.groups,
+        bridgeVersion: "1.0.9",
       }, "*");
     }
   });
@@ -1360,12 +1573,17 @@ if (
           type: "METUS_EXTENSION_SYNC",
           userId: res?.userId,
           groups: res?.groups || [],
+          bridgeVersion: "1.0.9",
         }, "*");
       });
     }
 
     // Kirim perintah posting nyata ke Facebook via background worker (Kunci DOM Lintas-Ekstensi)
-    if (event.data.type === "METUS_DISPATCH_POST" || event.data.type === "METUS_DISPATCH_POST_V2") {
+    if (
+      event.data.type === "METUS_DISPATCH_POST" ||
+      event.data.type === "METUS_DISPATCH_POST_V2" ||
+      event.data.type === "METUS_DISPATCH_POST_V3"
+    ) {
       const rId = event.data.resultId || "";
       const grpId = event.data.groupId || "";
       const domResultLockAttr = "data-metus-lock-res-" + rId;
