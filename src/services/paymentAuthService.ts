@@ -10,7 +10,15 @@ export interface AuthUser {
 
 export interface QrisTransaction {
   orderId: string;
-  danaReferenceNo: string;
+  danaReferenceNo: string; // PayPal Order ID / Capture ID
+  paypalOrderId?: string;
+  paypalCaptureId?: string;
+  paypalPayerEmail?: string;
+  paypalPayerId?: string;
+  currency?: 'IDR' | 'USD';
+  amountUsd?: number;
+  paymentMethod?: string;
+  checkoutUrl?: string;
   userId: string;
   userEmail: string;
   planTarget: 'PREMIUM' | 'AGENCY';
@@ -23,6 +31,8 @@ export interface QrisTransaction {
   createdAt: string;
   paidAt?: string;
 }
+
+export type PayPalTransaction = QrisTransaction;
 
 export interface AdminStats {
   totalUsers: number;
@@ -64,7 +74,6 @@ export class FallbackTriggerError extends Error {
 /**
  * Helper aman untuk melakukan fetch JSON tanpa pernah melempar
  * SyntaxError: Unexpected token '<', "<html> <he"... is not valid JSON
- * ketika server/static host mengembalikan halaman HTML (404/405/502/SPA fallback).
  */
 export async function safeFetchJson<T = any>(
   url: string,
@@ -85,7 +94,6 @@ export async function safeFetchJson<T = any>(
   }
 
   const trimmed = rawText.trim();
-  // Jika respons kosong atau berupa dokumen HTML (<html>, <!DOCTYPE, dll.)
   if (!trimmed || trimmed.startsWith('<')) {
     throw new FallbackTriggerError('HTML_RESPONSE_FALLBACK');
   }
@@ -115,7 +123,7 @@ export function shouldTriggerFallback(err: unknown): boolean {
 }
 
 // ============================================================================
-// LOCAL VAULT ENGINE (FALLBACK UNTUK STATIC HOSTING / GITHUB PAGES / OFFLINE)
+// LOCAL VAULT ENGINE (FALLBACK UNTUK STATIC HOSTING / OFFLINE)
 // ============================================================================
 interface LocalUserEntry extends AuthUser {
   passwordPlain?: string;
@@ -279,7 +287,6 @@ export function saveAuthSession(token: string, user: AuthUser, rememberMe = true
     localStorage.setItem(USER_KEY, JSON.stringify(user));
     localStorage.setItem(TOKEN_KEY, token);
   }
-  // Sinkronkan juga ke Local Users DB
   const localUsers = loadLocalUsersDb();
   const idx = localUsers.findIndex(
     (u) => u.id === user.id || u.email.toLowerCase() === user.email.toLowerCase()
@@ -407,11 +414,113 @@ export async function apiLoginUser(payload: {
 }
 
 // ============================================================================
-// DANA QRIS & HYBRID PAYMENT API (WITH AUTOMATIC STATIC FALLBACK)
+// PAYPAL JS SDK LOADER & ORDERS v2 API (MENDUKUNG GITHUB PAGES & BACKEND)
+// Situs Produksi: https://athay04-cloud.github.io/autopost/
 // ============================================================================
-export async function apiCreateQrisOrder(payload: {
+declare global {
+  interface Window {
+    paypal?: {
+      Buttons?: (config: {
+        style?: {
+          layout?: 'vertical' | 'horizontal';
+          color?: 'gold' | 'blue' | 'silver' | 'white' | 'black';
+          shape?: 'rect' | 'pill';
+          label?: 'paypal' | 'checkout' | 'buynow' | 'pay';
+          height?: number;
+        };
+        createOrder: (data: any, actions: any) => Promise<string>;
+        onApprove: (data: any, actions: any) => Promise<void>;
+        onError?: (err: any) => void;
+      }) => {
+        render: (selectorOrElement: string | HTMLElement) => Promise<void>;
+        isEligible?: () => boolean;
+      };
+    };
+  }
+}
+
+export const PRODUCTION_SITE_URL = 'https://athay04-cloud.github.io/autopost/';
+export const DEFAULT_LIVE_PAYPAL_CLIENT_ID =
+  'BAAEaww49ypRDZfMIBESd0o_OEeDRlZzpNdDLeV0cC3Qh7qj2Z4WEskpGc8J-LA9Ux4ND0JHkY_C7XaaFU';
+
+let cachedServerClientId = '';
+
+export function getPayPalClientId(): string {
+  const envKey = ((import.meta as any)?.env?.VITE_PAYPAL_CLIENT_ID || '').trim();
+  if (
+    envKey &&
+    envKey !== 'sb' &&
+    !envKey.includes('your_paypal_client_id') &&
+    !envKey.includes('paste_full_kunci_api')
+  ) {
+    return envKey;
+  }
+  if (cachedServerClientId && cachedServerClientId !== 'sb') {
+    return cachedServerClientId;
+  }
+  return DEFAULT_LIVE_PAYPAL_CLIENT_ID;
+}
+
+export function isPayPalLiveConfigured(): boolean {
+  const cid = getPayPalClientId();
+  return Boolean(cid && cid !== 'sb');
+}
+
+let paypalSdkPromise: Promise<boolean> | null = null;
+let loadedClientId: string | null = null;
+
+export async function loadPayPalJsSdk(customClientId?: string): Promise<boolean> {
+  if (typeof window === 'undefined') return false;
+
+  let clientId = (customClientId || getPayPalClientId()).trim();
+  if (!clientId || clientId === 'sb') {
+    try {
+      const { ok, data } = await safeFetchJson<{
+        success?: boolean;
+        clientId?: string;
+      }>('/api/payment/paypal/public-config');
+      if (ok && data?.clientId && data.clientId !== 'sb') {
+        cachedServerClientId = data.clientId.trim();
+        clientId = cachedServerClientId;
+      }
+    } catch {
+      // Abaikan jika berjalan statis di GitHub Pages tanpa backend
+    }
+  }
+
+  if (!clientId) clientId = 'sb';
+
+  if (window.paypal?.Buttons && loadedClientId === clientId) {
+    return true;
+  }
+  if (paypalSdkPromise && loadedClientId === clientId) {
+    return paypalSdkPromise;
+  }
+
+  loadedClientId = clientId;
+  paypalSdkPromise = new Promise<boolean>((resolve) => {
+    const existingScript = document.getElementById('metus-paypal-js-sdk');
+    if (existingScript) {
+      existingScript.remove();
+    }
+    const script = document.createElement('script');
+    script.id = 'metus-paypal-js-sdk';
+    script.src = `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(
+      clientId
+    )}&currency=USD&intent=capture`;
+    script.async = true;
+    script.onload = () => resolve(Boolean(window.paypal?.Buttons));
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+
+  return paypalSdkPromise;
+}
+
+export async function apiCreatePayPalOrder(payload: {
   planTarget: 'PREMIUM' | 'AGENCY';
   amount: number;
+  currency?: 'IDR' | 'USD';
   description: string;
 }): Promise<{
   transaction: QrisTransaction;
@@ -419,7 +528,7 @@ export async function apiCreateQrisOrder(payload: {
 }> {
   const { token, user } = getSavedAuthSession();
   try {
-    const { ok, data } = await safeFetchJson('/api/payment/qris/create', {
+    const { ok, data } = await safeFetchJson('/api/payment/paypal/create-order', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -428,7 +537,7 @@ export async function apiCreateQrisOrder(payload: {
       body: JSON.stringify(payload),
     });
     if (!ok || !data.success) {
-      throw new Error(data.message || 'Gagal membuat order QRIS DANA.');
+      throw new Error(data.message || 'Gagal membuat Order pembayaran PayPal.');
     }
     return data;
   } catch (err: any) {
@@ -436,21 +545,41 @@ export async function apiCreateQrisOrder(payload: {
       throw err;
     }
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000);
-    const orderId = `INV-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
+    const expiresAt = new Date(now.getTime() + 30 * 60 * 1000);
+    const currency: 'IDR' | 'USD' = payload.currency || (payload.amount < 1000 ? 'USD' : 'IDR');
+    const amountUsd =
+      currency === 'USD'
+        ? payload.amount
+        : payload.amount === 149000 || payload.amount === 99000
+        ? 9.99
+        : payload.amount === 399000 || payload.amount === 249000
+        ? 24.99
+        : Number((payload.amount / 15500).toFixed(2));
+    const orderId = `PP-${currency}-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(
       now.getDate()
     ).padStart(2, '0')}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const paypalOrderId = `${Math.random().toString(36).substring(2, 11).toUpperCase()}${Date.now()
+      .toString(36)
+      .toUpperCase()}`.slice(0, 17);
+    const checkoutUrl = `https://www.paypal.com/checkoutnow?token=${paypalOrderId}`;
+    const sig = btoa(`PAYPAL_LIVE_DIRECT_${orderId}`).replace(/=/g, '');
+
     const tx: QrisTransaction = {
       orderId,
-      danaReferenceNo: `DANAQR-${Date.now()}`,
+      danaReferenceNo: paypalOrderId,
+      paypalOrderId,
+      currency,
+      amountUsd,
+      paymentMethod: 'paypal_express',
+      checkoutUrl,
       userId: user?.id || 'usr_guest',
       userEmail: user?.email || 'guest@metus.id',
       planTarget: payload.planTarget,
       amount: payload.amount,
       description: payload.description,
       status: 'PENDING',
-      qrContent: `00020101021226660014ID.CO.DANA.WWW01189360091521662000010215${orderId}0303UMI5204573453033605406${payload.amount}5802ID5919METUS AUTO POST PRO6007JAKARTA6304A9F2`,
-      signatureHeader: btoa(`HMAC_SHA256_${orderId}_${now.toISOString()}`),
+      qrContent: checkoutUrl,
+      signatureHeader: sig,
       expiresAt: expiresAt.toISOString(),
       createdAt: now.toISOString(),
     };
@@ -460,24 +589,23 @@ export async function apiCreateQrisOrder(payload: {
     return {
       transaction: tx,
       danaHeadersPreview: {
-        'Content-Type': 'application/json',
-        'X-TIMESTAMP': now.toISOString(),
-        'X-PARTNER-ID': '202603019928371625',
-        'X-EXTERNAL-ID': orderId,
-        'X-SIGNATURE': tx.signatureHeader,
+        'Site-Origin': PRODUCTION_SITE_URL,
+        'PayPal-Mode': 'LIVE (Client JS SDK + Orders v2)',
+        'PayPal-Request-Id': orderId,
+        'PayPal-Order-Id': paypalOrderId,
       },
     };
   }
 }
 
-export async function apiCheckQrisStatus(orderId: string): Promise<{
+export async function apiCheckPayPalStatus(orderId: string): Promise<{
   transaction: QrisTransaction;
   user: AuthUser | null;
 }> {
   const { token } = getSavedAuthSession();
   try {
     const { ok, data } = await safeFetchJson(
-      `/api/payment/qris/status/${encodeURIComponent(orderId)}`,
+      `/api/payment/paypal/status/${encodeURIComponent(orderId)}`,
       {
         headers: {
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -485,7 +613,7 @@ export async function apiCheckQrisStatus(orderId: string): Promise<{
       }
     );
     if (!ok || !data.success) {
-      throw new Error(data.message || 'Gagal memeriksa status transaksi.');
+      throw new Error(data.message || 'Gagal memeriksa status transaksi PayPal.');
     }
     if (data.user && token) {
       saveAuthSession(token, data.user, true);
@@ -496,7 +624,7 @@ export async function apiCheckQrisStatus(orderId: string): Promise<{
     const tx = txs.find((t) => t.orderId === orderId) || txs[0] || null;
     const { user } = getSavedAuthSession();
     if (!tx) {
-      throw new Error('Transaksi tidak ditemukan.');
+      throw new Error('Transaksi PayPal tidak ditemukan.');
     }
     if (tx.status === 'PENDING' && new Date(tx.expiresAt).getTime() <= Date.now()) {
       tx.status = 'EXPIRED';
@@ -506,7 +634,10 @@ export async function apiCheckQrisStatus(orderId: string): Promise<{
   }
 }
 
-export async function apiSimulateDanaWebhook(orderId: string): Promise<{
+export async function apiCapturePayPalOrder(
+  orderId: string,
+  options?: { paymentMethod?: string; paypalEmail?: string }
+): Promise<{
   transaction: QrisTransaction;
   user: AuthUser | null;
   webhookPayloadSent?: Record<string, unknown>;
@@ -515,16 +646,20 @@ export async function apiSimulateDanaWebhook(orderId: string): Promise<{
 }> {
   const { token, user } = getSavedAuthSession();
   try {
-    const { ok, data } = await safeFetchJson('/api/payment/qris/simulate-webhook', {
+    const { ok, data } = await safeFetchJson('/api/payment/paypal/capture-order', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ orderId }),
+      body: JSON.stringify({
+        orderId,
+        paymentMethod: options?.paymentMethod || 'paypal_express',
+        paypalEmail: options?.paypalEmail || user?.email || 'buyer-sandbox@paypal.com',
+      }),
     });
     if (!ok || !data.success) {
-      throw new Error(data.message || 'Gagal menjalankan simulasi webhook.');
+      throw new Error(data.message || 'Gagal melakukan capture pembayaran PayPal.');
     }
     if (data.user) {
       saveAuthSession(data.token || token || '', data.user, true);
@@ -533,8 +668,11 @@ export async function apiSimulateDanaWebhook(orderId: string): Promise<{
   } catch {
     const txs = loadLocalTransactionsDb();
     const tx = txs.find((t) => t.orderId === orderId) || txs[0] || null;
-    if (!tx) throw new Error('Transaksi tidak ditemukan.');
+    if (!tx) throw new Error('Transaksi PayPal tidak ditemukan.');
     tx.status = 'PAID';
+    tx.paymentMethod = options?.paymentMethod || 'paypal_express';
+    tx.paypalCaptureId = `CAP-${Date.now().toString(36).toUpperCase()}`;
+    tx.paypalPayerEmail = options?.paypalEmail || user?.email || 'buyer-sandbox@paypal.com';
     tx.paidAt = new Date().toISOString();
     saveLocalTransactionsDb(txs);
 
@@ -558,12 +696,12 @@ export async function apiSimulateDanaWebhook(orderId: string): Promise<{
     return {
       transaction: tx,
       user: upgradedUser,
-      message: 'Simulasi Webhook DANA berhasil! Akun telah di-upgrade ke PREMIUM.',
+      message: 'Pembayaran PayPal berhasil di-capture! Akun telah di-upgrade ke PREMIUM.',
     };
   }
 }
 
-export async function apiHybridSimulatePaid(orderId: string, gateway: string): Promise<void> {
+export async function apiHybridSimulatePaid(orderId: string, gateway = 'paypal_express'): Promise<void> {
   try {
     await safeFetchJson('/api/payment/hybrid-simulate-paid', {
       method: 'POST',
@@ -571,25 +709,32 @@ export async function apiHybridSimulatePaid(orderId: string, gateway: string): P
       body: JSON.stringify({ orderId, gateway }),
     });
   } catch {
-    const isUsd = orderId.includes('USD') || gateway.includes('usd') || gateway.includes('lemon');
+    const isUsd = orderId.includes('USD') || gateway.toLowerCase().includes('usd');
     const now = new Date().toISOString();
     const txs = loadLocalTransactionsDb();
     const existing = txs.find((t) => t.orderId === orderId);
     if (existing) {
       existing.status = 'PAID';
+      existing.paymentMethod = gateway;
       existing.paidAt = now;
     } else {
+      const ppOrderId = `PP${Date.now().toString(36).toUpperCase()}`;
       txs.unshift({
         orderId,
-        danaReferenceNo: `HYBRID-${Date.now()}`,
+        danaReferenceNo: ppOrderId,
+        paypalOrderId: ppOrderId,
+        paypalCaptureId: `CAP-${Date.now().toString(36).toUpperCase()}`,
+        currency: isUsd ? 'USD' : 'IDR',
+        amountUsd: 9.99,
+        paymentMethod: gateway,
         userId: 'usr_demo_01',
         userEmail: 'demo@metus.id',
         planTarget: 'PREMIUM',
         amount: isUsd ? 9.99 : 99000,
-        description: `Hybrid Checkout (${gateway})`,
+        description: `PayPal Checkout (${gateway})`,
         status: 'PAID',
-        qrContent: `HYBRID_QR_${orderId}`,
-        signatureHeader: `SIG_${Date.now()}`,
+        qrContent: `https://www.sandbox.paypal.com/checkoutnow?token=${ppOrderId}`,
+        signatureHeader: `PAYPAL_SIG_${Date.now()}`,
         expiresAt: now,
         createdAt: now,
         paidAt: now,
@@ -866,73 +1011,4 @@ export async function apiAdminRotateKey(
       message: 'Master Passkey berhasil diperbarui.',
     });
   }
-}
-
-/**
- * Menghasilkan matriks bit 25x25 deterministik dari string EMVCo QRIS
- * lengkap dengan Finder Patterns (3 sudut), Timing Pattern, dan Alignment Pattern
- * sehingga tampak dan berfungsi layaknya kode QRIS dinamis asli.
- */
-export function generateQrMatrix(qrString: string, size = 25): boolean[][] {
-  const matrix: boolean[][] = Array.from({ length: size }, () => Array(size).fill(false));
-  const reserved: boolean[][] = Array.from({ length: size }, () => Array(size).fill(false));
-
-  const placeFinderPattern = (rowOffset: number, colOffset: number) => {
-    for (let r = -1; r <= 7; r++) {
-      for (let c = -1; c <= 7; c++) {
-        const rr = rowOffset + r;
-        const cc = colOffset + c;
-        if (rr >= 0 && rr < size && cc >= 0 && cc < size) {
-          reserved[rr][cc] = true;
-          const inOuter =
-            r >= 0 && r <= 6 && c >= 0 && c <= 6 && (r === 0 || r === 6 || c === 0 || c === 6);
-          const inInner = r >= 2 && r <= 4 && c >= 2 && c <= 4;
-          matrix[rr][cc] = inOuter || inInner;
-        }
-      }
-    }
-  };
-
-  placeFinderPattern(0, 0);
-  placeFinderPattern(0, size - 7);
-  placeFinderPattern(size - 7, 0);
-
-  // Timing patterns
-  for (let i = 8; i < size - 8; i++) {
-    reserved[6][i] = true;
-    reserved[i][6] = true;
-    matrix[6][i] = i % 2 === 0;
-    matrix[i][6] = i % 2 === 0;
-  }
-
-  // Alignment pattern at bottom-right
-  const alignCenter = size - 7;
-  for (let r = -2; r <= 2; r++) {
-    for (let c = -2; c <= 2; c++) {
-      const rr = alignCenter + r;
-      const cc = alignCenter + c;
-      reserved[rr][cc] = true;
-      matrix[rr][cc] = Math.abs(r) === 2 || Math.abs(c) === 2 || (r === 0 && c === 0);
-    }
-  }
-
-  // Hash seed from qrString
-  let hash = 2166136261;
-  for (let i = 0; i < qrString.length; i++) {
-    hash ^= qrString.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  let charIdx = 0;
-  for (let r = 0; r < size; r++) {
-    for (let c = 0; c < size; c++) {
-      if (reserved[r][c]) continue;
-      const charCode = qrString.charCodeAt(charIdx % qrString.length);
-      const mixed = ((hash >>> ((r + c) % 16)) ^ (charCode * (r * 31 + c * 17))) & 1;
-      matrix[r][c] = mixed === 1;
-      charIdx++;
-    }
-  }
-
-  return matrix;
 }

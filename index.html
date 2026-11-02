@@ -2,6 +2,63 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        if (typeof window === 'undefined' || !window.WebSocket || window.__viteHmrWsPatched) return;
+        window.__viteHmrWsPatched = true;
+        var NativeWebSocket = window.WebSocket;
+        class SafeViteWebSocket extends EventTarget {
+          constructor(url, protocols) {
+            super();
+            this.url = String(url || '');
+            this.protocol = Array.isArray(protocols) ? (protocols[0] || '') : (protocols || '');
+            this.readyState = 1;
+            this.bufferedAmount = 0;
+            this.extensions = '';
+            this.binaryType = 'blob';
+            this.onopen = null;
+            this.onerror = null;
+            this.onclose = null;
+            this.onmessage = null;
+            setTimeout(() => {
+              var openEv = new Event('open');
+              this.dispatchEvent(openEv);
+              if (typeof this.onopen === 'function') this.onopen(openEv);
+              var msgEv = new MessageEvent('message', { data: JSON.stringify({ type: 'connected' }) });
+              this.dispatchEvent(msgEv);
+              if (typeof this.onmessage === 'function') this.onmessage(msgEv);
+            }, 0);
+          }
+          send() {}
+          close() {
+            this.readyState = 3;
+          }
+        }
+        Object.assign(SafeViteWebSocket, {
+          CONNECTING: 0,
+          OPEN: 1,
+          CLOSING: 2,
+          CLOSED: 3,
+        });
+        window.WebSocket = function (url, protocols) {
+          var isViteHmr =
+            protocols === 'vite-hmr' ||
+            (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1) ||
+            String(url || '').indexOf('vite-hmr') !== -1;
+          if (isViteHmr) {
+            return new SafeViteWebSocket(url, protocols);
+          }
+          return protocols !== undefined
+            ? new NativeWebSocket(url, protocols)
+            : new NativeWebSocket(url);
+        };
+        window.WebSocket.prototype = NativeWebSocket.prototype;
+        window.WebSocket.CONNECTING = 0;
+        window.WebSocket.OPEN = 1;
+        window.WebSocket.CLOSING = 2;
+        window.WebSocket.CLOSED = 3;
+      })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Metus Auto-Post - Facebook Group Automation & Campaign Manager</title>
     <meta name="description" content="Professional Facebook Group Automation & Campaign Manager with multi-thread scheduling, spintax engine, and target selector." />

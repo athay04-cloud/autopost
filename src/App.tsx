@@ -806,7 +806,7 @@ export default function App() {
             saveAuthSession('jwt_hybrid_verified', upgraded, true);
             addLog(
               'success',
-              `[Hybrid Payment PAID] Order ${orderId} via ${gateway.toUpperCase()} terverifikasi! Akun di-upgrade ke PRO.`
+              `[PayPal Payment COMPLETED] Order ${orderId} via ${gateway.toUpperCase()} terverifikasi! Akun di-upgrade ke PRO.`
             );
           }}
         />
@@ -897,7 +897,7 @@ export default function App() {
         </div>
       </main>
 
-      {/* Upgrade Plan & QRIS DANA Bisnis Modal */}
+      {/* Upgrade Plan & PayPal Checkout Modal */}
       <UpgradePlanModal
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
@@ -907,7 +907,7 @@ export default function App() {
           setCurrentUser(updatedUser);
           addLog(
             'success',
-            `[DANA QRIS PAID] Invoice ${tx.orderId} lunas! Akun ${updatedUser.email} otomatis di-upgrade ke paket ${updatedUser.plan}.`
+            `[PAYPAL COMPLETED] Order ${tx.orderId} berhasil di-capture! Akun ${updatedUser.email} otomatis di-upgrade ke paket ${updatedUser.plan}.`
           );
         }}
       />

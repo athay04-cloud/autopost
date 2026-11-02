@@ -248,16 +248,16 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
     }
   };
 
-  const handleQuickCreatePaidOrder = async (gateway: 'dana_qris' | 'lemonsqueezy_usd') => {
+  const handleQuickCreatePaidOrder = async (gateway: 'paypal_idr' | 'paypal_usd') => {
     setIsLoading(true);
     try {
       const orderId =
-        gateway === 'dana_qris'
-          ? `INV-IDR-${Date.now().toString().slice(-6)}`
-          : `INV-USD-${Date.now().toString().slice(-6)}`;
+        gateway === 'paypal_idr'
+          ? `PP-IDR-${Date.now().toString().slice(-6)}`
+          : `PP-USD-${Date.now().toString().slice(-6)}`;
       await apiHybridSimulatePaid(orderId, gateway);
       await fetchOverview(adminToken);
-      showNotice(`Simulasi transaksi lunas (${orderId}) berhasil dicatat.`);
+      showNotice(`Simulasi transaksi PayPal lunas (${orderId}) berhasil dicatat.`);
     } finally {
       setIsLoading(false);
     }
@@ -305,7 +305,7 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 font-mono">
-                Root Backoffice · Lisensi Akun, Override QRIS DANA/Midtrans & Global Webhook
+                Root Backoffice · Lisensi Akun, Override Order PayPal &amp; Webhook PAYPAL-TRANSMISSION-SIG
               </p>
             </div>
           </div>
@@ -585,22 +585,22 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
                 <div className="space-y-6">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-                      <div className="text-xs text-slate-400">Revenue Domestik (QRIS / IDR)</div>
+                      <div className="text-xs text-slate-400">Revenue PayPal (Ekuivalen IDR)</div>
                       <div className="text-2xl font-extrabold text-emerald-400 font-mono">
                         Rp {stats.domesticRevenueIdr.toLocaleString('id-ID')}
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        DANA Bisnis · Midtrans QRIS · Virtual Account
+                        PayPal Express Checkout (Konversi IDR)
                       </div>
                     </div>
 
                     <div className="p-5 rounded-xl bg-slate-950 border border-slate-800 space-y-1">
-                      <div className="text-xs text-slate-400">Revenue Internasional (USD)</div>
+                      <div className="text-xs text-slate-400">Revenue PayPal (USD)</div>
                       <div className="text-2xl font-extrabold text-blue-400 font-mono">
                         ${stats.globalRevenueUsd.toFixed(2)}
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        PayPal Express · Lemon Squeezy · Global Card
+                        PayPal Balance · PayPal Express · Pay Later
                       </div>
                     </div>
 
@@ -703,28 +703,28 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
                       <div className="space-y-2.5 text-xs">
                         <button
                           type="button"
-                          onClick={() => handleQuickCreatePaidOrder('dana_qris')}
-                          className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center justify-between"
+                          onClick={() => handleQuickCreatePaidOrder('paypal_idr')}
+                          className="w-full py-3 px-4 rounded-xl bg-[#FFC439] hover:bg-[#f2b829] text-slate-950 font-bold flex items-center justify-between"
                         >
-                          <span>+ Simulasikan Order Lunas QRIS (Rp 99.000)</span>
+                          <span>+ Simulasikan Order PayPal Express (Ekuivalen Rp 99.000)</span>
                           <Zap className="w-4 h-4" />
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleQuickCreatePaidOrder('lemonsqueezy_usd')}
-                          className="w-full py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold flex items-center justify-between"
+                          onClick={() => handleQuickCreatePaidOrder('paypal_usd')}
+                          className="w-full py-3 px-4 rounded-xl bg-[#0070ba] hover:bg-[#005ea6] text-white font-bold flex items-center justify-between"
                         >
-                          <span>+ Simulasikan Order Global USD ($9.99)</span>
+                          <span>+ Simulasikan Order PayPal USD ($9.99)</span>
                           <Zap className="w-4 h-4" />
                         </button>
                       </div>
 
                       <div className="p-3.5 rounded-xl bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
-                        <div className="text-slate-200 font-bold">Status Endpoint Backend:</div>
+                        <div className="text-slate-200 font-bold">Status Endpoint Backend PayPal REST API v2:</div>
                         <div>● POST /api/admin/unlock (Aktif)</div>
-                        <div>● POST /api/payment/qris/webhook (SNAP-BI Verified)</div>
-                        <div>● POST /api/webhook/midtrans (SHA-512 Verified)</div>
-                        <div>● POST /api/webhook/lemonsqueezy (HMAC-256 Verified)</div>
+                        <div>● POST /api/payment/paypal/create-order (PayPal Orders v2)</div>
+                        <div>● POST /api/payment/paypal/capture-order (Capture Order)</div>
+                        <div>● POST /api/payment/paypal/webhook (PAYPAL-TRANSMISSION-SIG)</div>
                       </div>
                     </div>
                   </div>
@@ -951,17 +951,17 @@ export const SecretAdminPortal: React.FC<SecretAdminPortalProps> = ({
                     <div className="flex items-center gap-2 text-xs">
                       <button
                         type="button"
-                        onClick={() => handleQuickCreatePaidOrder('dana_qris')}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
+                        onClick={() => handleQuickCreatePaidOrder('paypal_idr')}
+                        className="px-3 py-1.5 rounded-lg bg-[#FFC439] hover:bg-[#f2b829] text-slate-950 font-bold"
                       >
-                        + Tes Order IDR
+                        + Tes PayPal (IDR)
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleQuickCreatePaidOrder('lemonsqueezy_usd')}
-                        className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+                        onClick={() => handleQuickCreatePaidOrder('paypal_usd')}
+                        className="px-3 py-1.5 rounded-lg bg-[#0070ba] hover:bg-[#005ea6] text-white font-semibold"
                       >
-                        + Tes Order USD
+                        + Tes PayPal ($9.99)
                       </button>
                     </div>
                   </div>

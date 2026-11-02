@@ -165,7 +165,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               {currentUser
                 ? 'Kelola sesi JWT aktif dan status paket langganan Anda.'
-                : 'Sistem autentikasi terenkripsi JWT & integrasi pembayaran DANA Bisnis.'}
+                : 'Sistem autentikasi terenkripsi JWT & integrasi pembayaran PayPal.'}
             </p>
           </div>
           <button
@@ -218,7 +218,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 className="w-full py-2.5 px-4 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
               >
                 <Sparkles className="w-4 h-4" />
-                <span>Upgrade ke PRO via QRIS DANA Sekarang</span>
+                <span>Upgrade ke PRO via PayPal Sekarang</span>
               </button>
             )}
 

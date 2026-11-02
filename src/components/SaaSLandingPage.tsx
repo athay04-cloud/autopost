@@ -3,8 +3,6 @@ import {
   Zap,
   ShieldCheck,
   Check,
-  QrCode,
-  CreditCard,
   Globe,
   Clock,
   ArrowRight,
@@ -14,12 +12,14 @@ import {
   Terminal,
   RefreshCw,
   CheckCircle2,
+  Lock,
   X,
 } from 'lucide-react';
 import {
-  generateQrMatrix,
   safeFetchJson,
   apiHybridSimulatePaid,
+  loadPayPalJsSdk,
+  isPayPalLiveConfigured,
 } from '../services/paymentAuthService';
 
 interface SaaSLandingPageProps {
@@ -37,15 +37,15 @@ const I18N_DICT = {
     nav_pricing: 'Harga & Paket',
     nav_faq: 'FAQ',
     nav_dashboard: 'Buka Workspace Dashboard',
-    nav_cta: 'Mulai Trial Gratis',
+    nav_cta: 'Upgrade via PayPal',
     hero_kicker: 'HEADLESS CHROME ENGINE · ANTI-CHECKPOINT GUARD v4.2',
     hero_title: 'Otomasi Ratusan Grup Facebook Tanpa Risiko Blokir atau Tab Berantakan.',
     hero_subtitle:
       'Metus Auto-Post menyebarkan promosi Anda ke ratusan grup tertarget secara headless di balik layar dengan Dynamic Spintext, Jeda Acak Anti-Spam, dan Auto-First Comment.',
-    hero_cta_primary: 'Upgrade ke PRO Sekarang',
+    hero_cta_primary: 'Upgrade ke PRO via PayPal',
     hero_cta_secondary: 'Masuk ke Live Workspace',
     hero_meta_1: '✓ 100% Eksekusi Lokal di Chrome Anda',
-    hero_meta_2: '✓ Pembayaran Instan QRIS & PayPal',
+    hero_meta_2: '✓ Pembayaran Aman via PayPal Express Checkout',
     hero_meta_3: '✓ Tanpa Password Facebook',
     mock_stat_groups: 'Grup Tersinkron',
     mock_stat_rate: 'Tingkat Sukses',
@@ -64,7 +64,7 @@ const I18N_DICT = {
     feat_4_title: '1-Click Group ID Extractor',
     feat_4_desc:
       'Sinkronisasikan seluruh daftar grup Facebook yang Anda ikuti langsung dari sesi Chrome aktif ke dashboard hanya dalam 1 klik.',
-    price_kicker: 'HARGA TRANSPARAN · OTOMATIS SESUAI NEGARA ANDA',
+    price_kicker: 'PEMBAYARAN RESMI PAYPAL · INSTANT CAPTURE & BUYER PROTECTION',
     price_heading: 'Pilih Paket Otomasi Sesuai Skala Bisnis Anda',
     price_monthly: 'Bulanan',
     price_yearly: 'Tahunan (Hemat 25%)',
@@ -81,37 +81,33 @@ const I18N_DICT = {
     plan_pro_f2: 'Hingga 5 Concurrent Headless Threads',
     plan_pro_f3: 'Auto-First Comment "Up" penarik interaksi',
     plan_pro_f4: '1-Click Group ID Extractor & Preset Manager',
-    plan_pro_btn: 'Upgrade ke PRO Sekarang',
+    plan_pro_btn: 'Checkout dengan PayPal (PRO)',
     plan_agency_name: 'Agency Ultimate',
     plan_agency_desc: 'Untuk agensi digital & tim dengan banyak akun Facebook.',
     plan_agency_f1: 'Multi-Akun Facebook Tanpa Batas',
     plan_agency_f2: 'Custom Chrome Extension Builder (.ZIP)',
     plan_agency_f3: 'Penjadwalan Siklus Berulang Otomatis',
     plan_agency_f4: 'Dukungan Prioritas WhatsApp & Webhook API',
-    plan_agency_btn: 'Pilih Paket Agency',
+    plan_agency_btn: 'Checkout dengan PayPal (Agency)',
     faq_heading: 'Pertanyaan yang Sering Diajukan (FAQ)',
     faq_q1: 'Apakah akun Facebook saya aman dari checkpoint atau banned?',
     faq_a1:
       'Sangat aman. Metus berjalan langsung di atas sesi browser Chrome asli Anda tanpa meminta password atau token pihak ketiga, dilengkapi jeda waktu acak (Smart Delay) dan Spintax agar setiap postingan terlihat natural.',
-    faq_q2: 'Metode pembayaran apa saja yang didukung untuk pengguna Indonesia & luar negeri?',
+    faq_q2: 'Bagaimana cara melakukan pembayaran langganan di Metus?',
     faq_a2:
-      'Untuk pengguna di Indonesia (IDR), kami mendukung QRIS Dinamis (DANA, GoPay, OVO, ShopeePay, m-Banking) dan Virtual Account Bank (BCA, Mandiri, BRI, BNI). Untuk pengguna Internasional (USD), tersedia pembayaran via Kartu Kredit (Visa, Mastercard, AMEX), PayPal, dan Lemon Squeezy.',
-    faq_q3: 'Berapa lama akun saya aktif setelah melakukan pembayaran?',
+      'Seluruh pembayaran diproses secara eksklusif dan aman melalui PayPal (mendukung PayPal Balance, PayPal Express Checkout, dan PayPal Pay Later dengan perlindungan pembeli penuh).',
+    faq_q3: 'Berapa lama akun saya aktif setelah melakukan pembayaran via PayPal?',
     faq_a3:
-      'Instan dalam hitungan detik! Sistem kami menggunakan Webhook otomatis dan Status Polling real-time yang langsung meng-upgrade akun Anda ke PRO begitu pembayaran terkonfirmasi.',
+      'Instan dalam hitungan detik! Sistem kami memverifikasi event webhook PAYMENT.CAPTURE.COMPLETED dari PayPal REST API v2 secara real-time dan langsung meng-upgrade akun Anda ke PRO.',
     footer_disclaimer:
       'Disclaimer: Metus Auto-Post adalah perangkat lunak otomasi browser independen dan tidak berafiliasi dengan, disponsori, atau didukung oleh Meta Platforms, Inc. (Facebook). Gunakan secara bijak sesuai pedoman komunitas grup.',
-    modal_title: 'Checkout Upgrade Akun PRO',
-    modal_tab_domestic: '🇮🇩 Domestik (QRIS & Virtual Account)',
-    modal_tab_global: '🌍 Internasional (Card / PayPal / Lemon Squeezy)',
-    modal_waiting_payment: 'Menunggu Pembayaran QRIS...',
-    modal_va_title: 'Atau Transfer Virtual Account Otomatis:',
-    modal_simulate_btn: 'Simulasi Bayar Berhasil (Trigger Webhook)',
-    modal_global_total: 'Total Tagihan Internasional (USD):',
-    modal_card_pay_btn: 'Bayar Sekarang & Aktifkan PRO Instan',
-    modal_paid_title: 'Pembayaran Berhasil! Akun Anda telah di-upgrade ke PRO',
+    modal_title: 'PayPal Express Checkout — Upgrade Akun PRO',
+    modal_waiting_payment: 'Sesi Order PayPal Aktif',
+    modal_simulate_btn: 'Trigger Webhook PayPal (PAYMENT.CAPTURE.COMPLETED)',
+    modal_global_total: 'Total Tagihan PayPal:',
+    modal_paid_title: 'Pembayaran PayPal Berhasil! Akun Anda telah di-upgrade ke PRO',
     modal_paid_desc:
-      'Webhook pembayaran telah diverifikasi. Anda dapat langsung menggunakan seluruh fitur PRO di Dashboard.',
+      'Event PayPal Webhook (PAYMENT.CAPTURE.COMPLETED) telah diverifikasi. Anda dapat langsung menggunakan seluruh fitur PRO di Dashboard.',
     modal_goto_dashboard: 'Masuk ke Dashboard PRO Sekarang',
   },
   en: {
@@ -120,15 +116,15 @@ const I18N_DICT = {
     nav_pricing: 'Pricing',
     nav_faq: 'FAQ',
     nav_dashboard: 'Open Workspace Dashboard',
-    nav_cta: 'Start Free Trial',
+    nav_cta: 'Upgrade via PayPal',
     hero_kicker: 'HEADLESS CHROME ENGINE · ANTI-CHECKPOINT GUARD v4.2',
     hero_title: 'Automate Hundreds of Facebook Groups Without Account Bans or Messy Tabs.',
     hero_subtitle:
       'Metus Auto-Post broadcasts your campaigns to hundreds of targeted Facebook groups headlessly in the background using Dynamic Spintext, Smart Anti-Spam Jitter, and Auto-First Comment.',
-    hero_cta_primary: 'Upgrade to PRO Now',
+    hero_cta_primary: 'Upgrade to PRO via PayPal',
     hero_cta_secondary: 'Launch Live Workspace',
     hero_meta_1: '✓ 100% Local Execution in Your Chrome',
-    hero_meta_2: '✓ Instant Checkout via Card, PayPal & QRIS',
+    hero_meta_2: '✓ Instant Checkout via PayPal Express & Pay Later',
     hero_meta_3: '✓ No Facebook Password Required',
     mock_stat_groups: 'Synced Groups',
     mock_stat_rate: 'Success Rate',
@@ -147,7 +143,7 @@ const I18N_DICT = {
     feat_4_title: '1-Click Group ID Extractor',
     feat_4_desc:
       'Sync all Facebook groups you have joined directly from your active Chrome session into the dashboard in a single click.',
-    price_kicker: 'TRANSPARENT PRICING · AUTO-LOCALIZED CURRENCY',
+    price_kicker: 'POWERED BY PAYPAL · INSTANT ORDER CAPTURE & BUYER PROTECTION',
     price_heading: 'Choose the Automation Plan That Fits Your Growth',
     price_monthly: 'Monthly',
     price_yearly: 'Yearly (Save 25%)',
@@ -164,37 +160,33 @@ const I18N_DICT = {
     plan_pro_f2: 'Up to 5 Concurrent Headless Threads',
     plan_pro_f3: 'Auto-First Comment "Bump" booster',
     plan_pro_f4: '1-Click Group ID Extractor & Preset Manager',
-    plan_pro_btn: 'Upgrade to PRO Now',
+    plan_pro_btn: 'Checkout with PayPal (PRO)',
     plan_agency_name: 'Agency Ultimate',
     plan_agency_desc: 'Built for digital agencies managing multiple Facebook identities.',
     plan_agency_f1: 'Unlimited Facebook Accounts',
     plan_agency_f2: 'Custom Chrome Extension Builder (.ZIP)',
     plan_agency_f3: 'Automated Multi-Cycle Campaign Scheduler',
     plan_agency_f4: 'Priority 24/7 Support & Webhook API',
-    plan_agency_btn: 'Choose Agency Plan',
+    plan_agency_btn: 'Checkout with PayPal (Agency)',
     faq_heading: 'Frequently Asked Questions (FAQ)',
     faq_q1: 'Is my Facebook account safe from checkpoints or bans?',
     faq_a1:
       'Yes! Metus executes directly inside your real Chrome session without asking for passwords or third-party tokens, combining Smart Jitter Delay and Spintax so every post looks 100% organic.',
-    faq_q2: 'What payment methods are accepted for Domestic & International users?',
+    faq_q2: 'What payment method is supported?',
     faq_a2:
-      'For Indonesian users (IDR), we accept Dynamic QRIS (DANA, GoPay, OVO, ShopeePay, Mobile Banking) and Bank Virtual Accounts. For International users (USD), we accept Credit/Debit Cards (Visa, Mastercard, AMEX), PayPal, and Lemon Squeezy.',
-    faq_q3: 'How fast is my PRO account activated after payment?',
+      'All payments are processed exclusively through PayPal REST API v2, supporting PayPal Balance, PayPal Express Checkout, and PayPal Pay Later with full Buyer Protection.',
+    faq_q3: 'How fast is my PRO account activated after PayPal checkout?',
     faq_a3:
-      'Instantly within seconds! Our real-time webhook handler and status polling upgrade your account to PRO automatically the moment your payment clears.',
+      'Instantly within seconds! Our real-time PayPal webhook handler (PAYMENT.CAPTURE.COMPLETED) upgrades your account to PRO automatically the moment your payment is captured.',
     footer_disclaimer:
       'Disclaimer: Metus Auto-Post is an independent browser automation tool and is not affiliated with, sponsored, or endorsed by Meta Platforms, Inc. (Facebook). Please use responsibly.',
-    modal_title: 'PRO Account Upgrade Checkout',
-    modal_tab_domestic: '🇮🇩 Indonesia (QRIS & Virtual Account)',
-    modal_tab_global: '🌍 Global (Card / PayPal / Lemon Squeezy)',
-    modal_waiting_payment: 'Awaiting QRIS Payment...',
-    modal_va_title: 'Or Instant Bank Virtual Account Transfer:',
-    modal_simulate_btn: 'Simulate Successful Payment (Trigger Webhook)',
-    modal_global_total: 'International Total (USD):',
-    modal_card_pay_btn: 'Pay Now & Activate PRO Instantly',
-    modal_paid_title: 'Payment Successful! Your Account Has Been Upgraded to PRO',
+    modal_title: 'PayPal Express Checkout — PRO Account Upgrade',
+    modal_waiting_payment: 'PayPal Order Active',
+    modal_simulate_btn: 'Trigger PayPal Webhook (PAYMENT.CAPTURE.COMPLETED)',
+    modal_global_total: 'PayPal Total Due:',
+    modal_paid_title: 'PayPal Payment Successful! Your Account Has Been Upgraded to PRO',
     modal_paid_desc:
-      'Payment webhook verified. You can now access all unlimited PRO features in the Workspace Dashboard.',
+      'PayPal webhook (PAYMENT.CAPTURE.COMPLETED) verified. You can now access all unlimited PRO features in the Workspace Dashboard.',
     modal_goto_dashboard: 'Enter PRO Dashboard Now',
   },
 };
@@ -222,7 +214,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
     }, 1800);
   };
 
-  // MODULE 1: Auto-Language Detection (localStorage 'preferred_lang' -> navigator.language)
+  // MODULE 1: Auto-Language Detection
   const [lang, setLang] = React.useState<Lang>(() => {
     const saved = localStorage.getItem('preferred_lang');
     if (saved === 'id' || saved === 'en') return saved;
@@ -233,41 +225,95 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   const handleSetLang = (newLang: Lang) => {
     setLang(newLang);
     localStorage.setItem('preferred_lang', newLang);
-    setPaymentChannel(newLang === 'id' ? 'domestic' : 'global');
   };
 
   const t = I18N_DICT[lang];
 
-  // MODULE 2: Hybrid Payment & Billing State
+  // MODULE 2: PayPal Payment & Billing State
   const [billingCycle, setBillingCycle] = React.useState<'monthly' | 'yearly'>('monthly');
   const [isCheckoutOpen, setIsCheckoutOpen] = React.useState(false);
   const [selectedTier, setSelectedTier] = React.useState<'pro' | 'agency'>('pro');
-  const [paymentChannel, setPaymentChannel] = React.useState<'domestic' | 'global'>(() =>
-    lang === 'id' ? 'domestic' : 'global'
-  );
-  const [orderId, setOrderId] = React.useState('INV-IDR-992831');
+  const [orderId, setOrderId] = React.useState('PP-USD-992831');
   const [paymentStatus, setPaymentStatus] = React.useState<'PENDING' | 'PAID'>('PENDING');
-  const [countdownSeconds, setCountdownSeconds] = React.useState(15 * 60);
+  const [countdownSeconds, setCountdownSeconds] = React.useState(30 * 60);
   const [isPolling, setIsPolling] = React.useState(false);
   const [openFaqIndex, setOpenFaqIndex] = React.useState<number | null>(0);
 
-  // Card Input States (Global Tab)
-  const [cardNumber, setCardNumber] = React.useState('4532 •••• •••• 8891');
-  const [cardExpiry, setCardExpiry] = React.useState('08/29');
-  const [cardCvc, setCardCvc] = React.useState('882');
+  // PayPal Account Express States
+  const [paypalBuyerEmail, setPaypalBuyerEmail] = React.useState('buyer-live@paypal.com');
+  const [paypalBuyerPassword, setPaypalBuyerPassword] = React.useState('paypal2026');
+  const paypalLandingBtnRef = React.useRef<HTMLDivElement | null>(null);
 
   const openCheckout = (tier: 'pro' | 'agency') => {
     setSelectedTier(tier);
     const prefix = lang === 'id' ? 'IDR' : 'USD';
-    const newOrderId = `INV-${prefix}-${Date.now().toString().slice(-6)}`;
+    const newOrderId = `PP-${prefix}-${Date.now().toString().slice(-6)}`;
     setOrderId(newOrderId);
     setPaymentStatus('PENDING');
-    setCountdownSeconds(15 * 60);
-    setPaymentChannel(lang === 'id' ? 'domestic' : 'global');
+    setCountdownSeconds(30 * 60);
     setIsCheckoutOpen(true);
   };
 
-  // 15-Minute Countdown Timer
+  // Mount Official PayPal JS SDK Smart Buttons in Landing Modal
+  React.useEffect(() => {
+    if (!isCheckoutOpen || paymentStatus !== 'PENDING') return;
+    let cancelled = false;
+    const rawUsd =
+      selectedTier === 'pro'
+        ? billingCycle === 'monthly'
+          ? '9.99'
+          : '7.49'
+        : billingCycle === 'monthly'
+        ? '24.99'
+        : '18.99';
+
+    loadPayPalJsSdk().then((ready) => {
+      if (cancelled || !ready || !window.paypal?.Buttons || !paypalLandingBtnRef.current) return;
+      paypalLandingBtnRef.current.innerHTML = '';
+      try {
+        window.paypal
+          .Buttons({
+            style: {
+              layout: 'vertical',
+              color: 'gold',
+              shape: 'rect',
+              label: 'paypal',
+              height: 40,
+            },
+            createOrder: (_data: any, actions: any) => {
+              return actions.order.create({
+                intent: 'CAPTURE',
+                purchase_units: [
+                  {
+                    reference_id: orderId,
+                    description: `Metus Auto-Post (${selectedTier.toUpperCase()})`,
+                    amount: {
+                      currency_code: 'USD',
+                      value: rawUsd,
+                    },
+                  },
+                ],
+              });
+            },
+            onApprove: async (_data: any, actions: any) => {
+              await actions.order.capture();
+              await apiHybridSimulatePaid(orderId, 'paypal_js_sdk_live');
+              setPaymentStatus('PAID');
+              onUpgradeCompleted(orderId, 'paypal_js_sdk_live');
+            },
+          })
+          .render(paypalLandingBtnRef.current);
+      } catch {
+        // Ignore rapid re-render
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCheckoutOpen, paymentStatus, selectedTier, billingCycle, orderId, onUpgradeCompleted]);
+
+  // 30-Minute Countdown Timer
   React.useEffect(() => {
     if (!isCheckoutOpen || paymentStatus !== 'PENDING') return;
     const timer = window.setInterval(() => {
@@ -287,7 +333,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         );
         if (data && data.status === 'PAID') {
           setPaymentStatus('PAID');
-          onUpgradeCompleted(orderId, paymentChannel);
+          onUpgradeCompleted(orderId, 'paypal_express');
         }
       } catch {
         // Ignore network/HTML fallback errors
@@ -296,9 +342,9 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       }
     }, 3000);
     return () => window.clearInterval(poll);
-  }, [isCheckoutOpen, paymentStatus, orderId, paymentChannel, onUpgradeCompleted]);
+  }, [isCheckoutOpen, paymentStatus, orderId, onUpgradeCompleted]);
 
-  const handleSimulatePaymentSuccess = async (gateway: string) => {
+  const handleSimulatePaymentSuccess = async (gateway = 'paypal_express') => {
     await apiHybridSimulatePaid(orderId, gateway);
     setPaymentStatus('PAID');
     onUpgradeCompleted(orderId, gateway);
@@ -314,8 +360,8 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   const proPrice =
     lang === 'id'
       ? billingCycle === 'monthly'
-        ? 'Rp 99.000'
-        : 'Rp 74.000'
+        ? '$9.99 (Rp 149rb)'
+        : '$7.49 (Rp 115rb)'
       : billingCycle === 'monthly'
       ? '$9.99'
       : '$7.49';
@@ -323,31 +369,20 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   const agencyPrice =
     lang === 'id'
       ? billingCycle === 'monthly'
-        ? 'Rp 249.000'
-        : 'Rp 189.000'
+        ? '$24.99 (Rp 399rb)'
+        : '$18.99 (Rp 295rb)'
       : billingCycle === 'monthly'
       ? '$24.99'
       : '$18.99';
 
-  const domesticCheckoutAmount =
+  const activePayPalUsdAmount =
     selectedTier === 'pro'
       ? billingCycle === 'monthly'
-        ? 'Rp 99.000'
-        : 'Rp 74.000'
+        ? '$9.99 USD'
+        : '$7.49 USD'
       : billingCycle === 'monthly'
-      ? 'Rp 249.000'
-      : 'Rp 189.000';
-
-  const globalCheckoutAmount =
-    selectedTier === 'pro'
-      ? billingCycle === 'monthly'
-        ? '$9.99'
-        : '$7.49'
-      : billingCycle === 'monthly'
-      ? '$24.99'
-      : '$18.99';
-
-  const qrMatrix = React.useMemo(() => generateQrMatrix(orderId, 23), [orderId]);
+      ? '$24.99 USD'
+      : '$18.99 USD';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -421,9 +456,10 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             <button
               type="button"
               onClick={() => openCheckout('pro')}
-              className="px-4 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-600/25 transition-all"
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-[#FFC439] hover:bg-[#f2b829] text-slate-950 shadow-lg transition-all flex items-center gap-1.5"
             >
-              {t.nav_cta}
+              <span className="font-black italic text-[#003087]">PayPal</span>
+              <span>{t.nav_cta}</span>
             </button>
           </div>
         </div>
@@ -452,9 +488,9 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                 <button
                   type="button"
                   onClick={() => openCheckout('pro')}
-                  className="px-6 py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs sm:text-sm shadow-xl shadow-blue-600/25 flex items-center gap-2 transition-all"
+                  className="px-6 py-3.5 rounded-xl bg-[#FFC439] hover:bg-[#f2b829] text-slate-950 font-bold text-xs sm:text-sm shadow-xl flex items-center gap-2 transition-all"
                 >
-                  <Sparkles className="w-4 h-4" />
+                  <Sparkles className="w-4 h-4 text-[#003087]" />
                   <span>{t.hero_cta_primary}</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
@@ -577,13 +613,13 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       </section>
 
       {/* ===================================================================
-          4. INTERACTIVE PRICING TABLE (Monthly vs Yearly + Auto Currency)
+          4. INTERACTIVE PRICING TABLE (Monthly vs Yearly + PayPal Checkout)
           =================================================================== */}
       <section id="pricing" className="py-16 lg:py-20 border-b border-slate-900">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-widest text-blue-400 mb-2">
+              <div className="text-xs font-semibold uppercase tracking-widest text-sky-400 mb-2">
                 {t.price_kicker}
               </div>
               <h2 className="text-2xl sm:text-3xl font-extrabold text-white">{t.price_heading}</h2>
@@ -595,7 +631,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                 onClick={() => setBillingCycle('monthly')}
                 className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
                   billingCycle === 'monthly'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-[#0070ba] text-white'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -606,7 +642,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                 onClick={() => setBillingCycle('yearly')}
                 className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all ${
                   billingCycle === 'yearly'
-                    ? 'bg-blue-600 text-white'
+                    ? 'bg-[#0070ba] text-white'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -623,9 +659,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                   {t.plan_free_name}
                 </div>
                 <div className="mt-3 flex items-baseline gap-1">
-                  <span className="text-3xl font-extrabold text-white">
-                    {lang === 'id' ? 'Rp 0' : '$0'}
-                  </span>
+                  <span className="text-3xl font-extrabold text-white">$0</span>
                   <span className="text-xs text-slate-400">{t.plan_free_period}</span>
                 </div>
                 <p className="mt-2 text-xs text-slate-400">{t.plan_free_desc}</p>
@@ -653,16 +687,16 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             </div>
 
             {/* PRO Tier */}
-            <div className="p-7 rounded-2xl bg-slate-900 border-2 border-blue-600 shadow-2xl shadow-blue-600/15 flex flex-col justify-between">
+            <div className="p-7 rounded-2xl bg-slate-900 border-2 border-[#0070ba] shadow-2xl shadow-blue-600/15 flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold uppercase tracking-wider text-blue-400">
+                  <span className="text-xs font-bold uppercase tracking-wider text-sky-400">
                     {t.plan_pro_name}
                   </span>
-                  <span className="text-xs font-mono text-emerald-400">PRO</span>
+                  <span className="text-xs font-mono text-[#FFC439] font-bold">PAYPAL VERIFIED</span>
                 </div>
                 <div className="mt-3 flex items-baseline gap-1">
-                  <span className="text-4xl font-extrabold text-white">{proPrice}</span>
+                  <span className="text-3xl font-extrabold text-white">{proPrice}</span>
                   <span className="text-xs text-slate-400">
                     {lang === 'id' ? '/ bulan' : '/ month'}
                   </span>
@@ -671,16 +705,16 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
 
                 <ul className="mt-6 space-y-3 text-xs text-slate-200">
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-400 shrink-0" /> {t.plan_pro_f1}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_pro_f1}
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-400 shrink-0" /> {t.plan_pro_f2}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_pro_f2}
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-400 shrink-0" /> {t.plan_pro_f3}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_pro_f3}
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-400 shrink-0" /> {t.plan_pro_f4}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_pro_f4}
                   </li>
                 </ul>
               </div>
@@ -689,12 +723,13 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                 <button
                   type="button"
                   onClick={() => openCheckout('pro')}
-                  className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-xs font-bold text-white shadow-lg shadow-blue-600/25 transition-all"
+                  className="w-full py-3.5 rounded-xl bg-[#FFC439] hover:bg-[#f2b829] text-xs font-bold text-slate-950 shadow-lg transition-all flex items-center justify-center gap-2"
                 >
-                  {t.plan_pro_btn}
+                  <span className="font-black italic text-[#003087]">PayPal</span>
+                  <span>{t.plan_pro_btn}</span>
                 </button>
                 <div className="text-[11px] text-center text-slate-400">
-                  🇮🇩 QRIS · DANA · BCA · Mandiri &nbsp;|&nbsp; 🌍 Visa · Mastercard · PayPal
+                  Powered by <strong>PayPal Express Checkout</strong> &amp; <strong>PayPal Pay Later</strong>
                 </div>
               </div>
             </div>
@@ -702,7 +737,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
             {/* Agency Tier */}
             <div className="p-7 rounded-2xl bg-slate-900/70 border border-slate-800 flex flex-col justify-between">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-indigo-400">
+                <div className="text-xs font-semibold uppercase tracking-wider text-sky-400">
                   {t.plan_agency_name}
                 </div>
                 <div className="mt-3 flex items-baseline gap-1">
@@ -715,16 +750,16 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
 
                 <ul className="mt-6 space-y-3 text-xs text-slate-300">
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-indigo-400 shrink-0" /> {t.plan_agency_f1}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_agency_f1}
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-indigo-400 shrink-0" /> {t.plan_agency_f2}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_agency_f2}
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-indigo-400 shrink-0" /> {t.plan_agency_f3}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_agency_f3}
                   </li>
                   <li className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-indigo-400 shrink-0" /> {t.plan_agency_f4}
+                    <Check className="w-4 h-4 text-sky-400 shrink-0" /> {t.plan_agency_f4}
                   </li>
                 </ul>
               </div>
@@ -732,9 +767,10 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
               <button
                 type="button"
                 onClick={() => openCheckout('agency')}
-                className="mt-8 w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white transition-colors"
+                className="mt-8 w-full py-3 rounded-xl bg-[#0070ba] hover:bg-[#005ea6] text-xs font-bold text-white transition-colors flex items-center justify-center gap-2"
               >
-                {t.plan_agency_btn}
+                <span className="font-black italic">PayPal</span>
+                <span>{t.plan_agency_btn}</span>
               </button>
             </div>
           </div>
@@ -759,7 +795,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                 <div
                   key={idx}
                   className={`p-5 rounded-2xl bg-slate-900 border transition-colors ${
-                    isOpen ? 'border-blue-600/60' : 'border-slate-800'
+                    isOpen ? 'border-[#0070ba]' : 'border-slate-800'
                   }`}
                 >
                   <button
@@ -769,7 +805,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                   >
                     <span>{item.q}</span>
                     <ChevronDown
-                      className={`w-4 h-4 text-blue-400 shrink-0 transition-transform ${
+                      className={`w-4 h-4 text-sky-400 shrink-0 transition-transform ${
                         isOpen ? 'rotate-180' : ''
                       }`}
                     />
@@ -790,7 +826,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       <footer className="py-12 bg-slate-950 text-xs text-slate-400 mt-auto">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
           <div className="space-y-2 max-w-xl">
-            <div className="font-bold text-white">Metus Auto-Post SaaS Suite</div>
+            <div className="font-bold text-white">Metus Auto-Post SaaS Suite · PayPal Billing</div>
             <p className="text-[11px] text-slate-500 leading-relaxed">{t.footer_disclaimer}</p>
           </div>
           <div className="flex flex-wrap items-center gap-5">
@@ -815,16 +851,21 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
       </footer>
 
       {/* ===================================================================
-          5. INTERACTIVE HYBRID CHECKOUT MODAL (DOMESTIC QRIS vs GLOBAL USD)
+          5. INTERACTIVE PAYPAL EXPRESS CHECKOUT MODAL
           =================================================================== */}
       {isCheckoutOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="relative w-full max-w-2xl rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden text-slate-100">
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-3 sm:p-4 bg-slate-950/80 backdrop-blur-sm">
+          <div className="relative w-full max-w-xl max-h-[90vh] flex flex-col my-auto rounded-2xl bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden text-slate-100">
             {/* Header */}
-            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-bold text-white">{t.modal_title}</h3>
-                <p className="text-xs text-slate-400 font-mono">Order ID: {orderId}</p>
+            <div className="px-6 py-4 bg-slate-950 border-b border-slate-800 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="px-2.5 py-1 rounded-md bg-[#003087] text-white font-black italic text-xs tracking-tight">
+                  PayPal
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">{t.modal_title}</h3>
+                  <p className="text-xs text-slate-400 font-mono">PayPal Order ID: {orderId}</p>
+                </div>
               </div>
               <button
                 type="button"
@@ -835,40 +876,8 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
               </button>
             </div>
 
-            {/* Channel Tabs (Domestic vs Global) */}
-            {paymentStatus === 'PENDING' && (
-              <div className="px-6 pt-4">
-                <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-950 border border-slate-800">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentChannel('domestic')}
-                    className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                      paymentChannel === 'domestic'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <QrCode className="w-3.5 h-3.5" />
-                    <span>{t.modal_tab_domestic}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPaymentChannel('global')}
-                    className={`py-2 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                      paymentChannel === 'global'
-                        ? 'bg-blue-600 text-white'
-                        : 'text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <Globe className="w-3.5 h-3.5" />
-                    <span>{t.modal_tab_global}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Modal Content */}
-            <div className="p-6">
+            {/* Modal Content (Scrollable when PayPal Debit/Credit Card inline form expands) */}
+            <div className="p-6 overflow-y-auto flex-1 min-h-0 overscroll-contain">
               {paymentStatus === 'PAID' ? (
                 <div className="py-6 text-center space-y-4">
                   <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto" />
@@ -887,147 +896,102 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
                     </button>
                   </div>
                 </div>
-              ) : paymentChannel === 'domestic' ? (
-                /* DOMESTIC TAB: QRIS + Virtual Account */
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
-                  <div className="md:col-span-5 flex flex-col items-center">
-                    <div className="p-4 rounded-2xl bg-white text-slate-900 w-56 shadow-lg">
-                      <div className="flex items-center justify-between border-b border-slate-200 pb-2 mb-3">
-                        <span className="font-black text-xs">QRIS</span>
-                        <span className="text-[10px] font-bold text-blue-600">MIDTRANS · DANA</span>
-                      </div>
-                      <div className="w-44 h-44 mx-auto bg-white p-2 rounded-lg border border-slate-200 flex items-center justify-center">
-                        <svg
-                          viewBox={`0 0 ${qrMatrix.length} ${qrMatrix.length}`}
-                          className="w-full h-full"
-                          shapeRendering="crispEdges"
-                        >
-                          {qrMatrix.map((row, rIdx) =>
-                            row.map((cell, cIdx) =>
-                              cell ? (
-                                <rect
-                                  key={`${rIdx}-${cIdx}`}
-                                  x={cIdx}
-                                  y={rIdx}
-                                  width={1}
-                                  height={1}
-                                  fill="#0f172a"
-                                />
-                              ) : null
-                            )
-                          )}
-                        </svg>
-                      </div>
-                      <div className="mt-3 pt-2 border-t border-slate-200 flex items-center justify-between text-xs">
-                        <span className="text-slate-500">Total</span>
-                        <span className="font-extrabold text-slate-900">{domesticCheckoutAmount}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-7 space-y-4 text-xs">
-                    <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-800/60 flex items-center justify-between">
-                      <span className="text-amber-200 font-semibold">{t.modal_waiting_payment}</span>
-                      <span className="font-mono text-sm font-bold text-amber-300">
-                        {formatCountdown(countdownSeconds)}
-                      </span>
-                    </div>
-
-                    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
-                      <div className="font-semibold text-white">{t.modal_va_title}</div>
-                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-300">
-                        <div className="p-2 rounded bg-slate-900 border border-slate-800">BCA: 88019283711</div>
-                        <div className="p-2 rounded bg-slate-900 border border-slate-800">Mandiri: 8902291827</div>
-                        <div className="p-2 rounded bg-slate-900 border border-slate-800">BRI: 26219002918</div>
-                        <div className="p-2 rounded bg-slate-900 border border-slate-800">BNI: 82710092831</div>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => handleSimulatePaymentSuccess('midtrans_qris')}
-                      className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg transition-all"
-                    >
-                      <ShieldCheck className="w-4 h-4" />
-                      <span>{t.modal_simulate_btn}</span>
-                    </button>
-                  </div>
-                </div>
               ) : (
-                /* GLOBAL TAB: Credit Card / PayPal / Lemon Squeezy */
                 <div className="space-y-4 text-xs">
+                  {/* Top Summary & Countdown */}
                   <div className="flex items-center justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                    <span className="text-slate-300">{t.modal_global_total}</span>
-                    <span className="text-lg font-extrabold text-blue-400">
-                      {globalCheckoutAmount} / mo
-                    </span>
+                    <div>
+                      <div className="text-slate-400">{t.modal_global_total}</div>
+                      <div className="text-lg font-extrabold text-white mt-0.5">
+                        {activePayPalUsdAmount}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-[11px] text-sky-400 font-semibold">
+                        {t.modal_waiting_payment}
+                      </div>
+                      <div className="font-mono text-sm font-bold text-emerald-400">
+                        {formatCountdown(countdownSeconds)}
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleSimulatePaymentSuccess('paypal')}
-                      className="py-3 px-4 rounded-xl bg-[#0070ba] hover:bg-[#005ea6] text-white font-bold flex items-center justify-center gap-2"
-                    >
-                      <span>Pay with PayPal Express</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSimulatePaymentSuccess('lemonsqueezy')}
-                      className="py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold flex items-center justify-center gap-2"
-                    >
-                      <span>Checkout via Lemon Squeezy</span>
-                    </button>
-                  </div>
-
+                  {/* PayPal Official Smart Buttons & Mode Status (Live vs Sandbox) */}
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                    <div className="flex items-center gap-2 font-semibold text-white">
-                      <CreditCard className="w-4 h-4 text-blue-400" />
-                      <span>Credit / Debit Card (Visa · Mastercard · AMEX)</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 font-semibold text-white">
+                        <Globe className="w-4 h-4 text-sky-400" />
+                        <span>PayPal Express Checkout</span>
+                      </div>
+                      {isPayPalLiveConfigured() ? (
+                        <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
+                          ● LIVE (Real Money · www.paypal.com)
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-bold">
+                          ● SANDBOX TEST (www.sandbox.paypal.com)
+                        </span>
+                      )}
                     </div>
-                    <input
-                      type="text"
-                      value={cardNumber}
-                      onChange={(e) => setCardNumber(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-white font-mono"
-                    />
-                    <div className="grid grid-cols-2 gap-3">
-                      <input
-                        type="text"
-                        value={cardExpiry}
-                        onChange={(e) => setCardExpiry(e.target.value)}
-                        className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-white font-mono"
+
+                    {!isPayPalLiveConfigured() && (
+                      <div className="p-2.5 rounded-lg bg-amber-950/50 border border-amber-800/60 text-[11px] text-amber-200 leading-relaxed">
+                        Saat ini masih menggunakan Client ID <code>sb</code> (<strong>Sandbox / Simulasi</strong> — belum menerima uang asli). Untuk menerima uang asli di <code>www.paypal.com</code>, salin penuh <strong>Kunci API (Live)</strong> dari dashboard PayPal Anda ke <code>VITE_PAYPAL_CLIENT_ID</code> / <code>PAYPAL_CLIENT_ID</code>.
+                      </div>
+                    )}
+
+                    {/* Official PayPal Gold & Card Smart Buttons */}
+                    <div className="space-y-2.5 pt-1">
+                      <div
+                        ref={paypalLandingBtnRef}
+                        className="w-full min-h-[42px] rounded-xl bg-white p-3 text-slate-900 shadow-inner"
                       />
-                      <input
-                        type="text"
-                        value={cardCvc}
-                        onChange={(e) => setCardCvc(e.target.value)}
-                        className="w-full px-3.5 py-2.5 rounded-lg bg-slate-900 border border-slate-800 text-white font-mono"
-                      />
+
+                      <button
+                        type="button"
+                        onClick={() => handleSimulatePaymentSuccess('paypal_express')}
+                        className="w-full py-3 rounded-xl bg-[#FFC439] hover:bg-[#f2b829] text-slate-950 font-bold flex items-center justify-center gap-2 transition-colors shadow-lg"
+                      >
+                        <Lock className="w-3.5 h-3.5 text-[#003087]" />
+                        <span className="font-black italic text-[#003087]">PayPal</span>
+                        <span>Express Checkout ({activePayPalUsdAmount})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleSimulatePaymentSuccess('paypal_pay_later')}
+                        className="w-full py-3 rounded-xl bg-[#0070ba] hover:bg-[#005ea6] text-white font-bold flex items-center justify-center gap-2 transition-colors"
+                      >
+                        <span className="font-black italic">PayPal</span>
+                        <span>Pay Later (4x Interest-Free · {activePayPalUsdAmount})</span>
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleSimulatePaymentSuccess('global_card')}
-                      className="w-full py-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold"
-                    >
-                      {t.modal_card_pay_btn}
-                    </button>
                   </div>
+
+                  {/* Webhook Test Trigger */}
+                  <button
+                    type="button"
+                    onClick={() => handleSimulatePaymentSuccess('paypal_webhook_capture')}
+                    className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 font-semibold text-xs flex items-center justify-center gap-2 border border-slate-700 transition-colors"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>{t.modal_simulate_btn}</span>
+                  </button>
                 </div>
               )}
             </div>
 
             {/* Footer Status Polling Bar */}
-            <div className="px-6 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400 font-mono">
+            <div className="px-6 py-3 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400 font-mono shrink-0">
               <span className="flex items-center gap-1.5">
-                <RefreshCw className={`w-3 h-3 ${isPolling ? 'animate-spin text-blue-400' : ''}`} />
+                <RefreshCw className={`w-3 h-3 ${isPolling ? 'animate-spin text-sky-400' : ''}`} />
                 <span>
                   {paymentStatus === 'PAID'
-                    ? `STATUS: PAID (${orderId})`
+                    ? `PAYPAL STATUS: COMPLETED (${orderId})`
                     : `Polling /api/payment/check-status?orderId=${orderId}`}
                 </span>
               </span>
-              <span>TLS 1.3 · SNAP-BI & LEMON SQUEEZY</span>
+              <span>PAYPAL BUYER PROTECTION · TLS 1.3</span>
             </div>
           </div>
         </div>

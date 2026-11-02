@@ -233,16 +233,16 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </button>
 
-          {/* Upgrade Plan QRIS DANA CTA */}
+          {/* Upgrade Plan PayPal CTA */}
           <button
             onClick={onOpenUpgradeModal}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-[0.98] rounded-lg shadow-sm shadow-blue-500/20 transition-all"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-950 bg-[#FFC439] hover:bg-[#f2b829] active:scale-[0.98] rounded-lg shadow-sm transition-all"
           >
-            <Sparkles className="w-3.5 h-3.5" />
+            <Sparkles className="w-3.5 h-3.5 text-[#003087]" />
             <span className="whitespace-nowrap">
               {currentUser?.plan === 'PREMIUM' || currentUser?.plan === 'AGENCY'
                 ? `Paket ${currentUser.plan}`
-                : 'Upgrade QRIS'}
+                : 'Upgrade PayPal'}
             </span>
           </button>
         </div>
