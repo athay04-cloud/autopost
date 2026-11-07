@@ -797,15 +797,12 @@ export default function App() {
               try {
                 const bridgeVer =
                   document.documentElement.getAttribute('data-metus-bridge-version') || '';
-                const isModernBridge = bridgeVer === '1.0.9' || bridgeVer === '1.0.8';
-                if (
-                  scenToUse.photoUrls &&
-                  scenToUse.photoUrls.length > 0 &&
-                  bridgeVer !== '1.0.9'
-                ) {
+                const isModernBridge =
+                  bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
+                if (isAnonymous && bridgeVer !== '1.1.2') {
                   addLog(
                     'warn',
-                    `[Thread #${workerId}] PERINGATAN: Anda melampirkan ${scenToUse.photoUrls.length} foto, tetapi Ekstensi Chrome yang aktif masih versi lama (${bridgeVer || 'v1.0.7/v1.0.8'}). Unduh & muat ulang Ekstensi v1.0.9 agar foto ikut ter-posting ke Facebook!`
+                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${bridgeVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.2 agar tombol Postingan Anonim Facebook diklik otomatis!`
                   );
                 }
                 window.postMessage(
@@ -815,6 +812,7 @@ export default function App() {
                     content: rendered,
                     firstComment: resolvedFirstComment,
                     photoUrls: scenToUse.photoUrls || [],
+                    isAnonymous: isAnonymous,
                     resultId: resultId,
                   },
                   '*'
