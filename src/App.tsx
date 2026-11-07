@@ -797,12 +797,14 @@ export default function App() {
               try {
                 const bridgeVer =
                   document.documentElement.getAttribute('data-metus-bridge-version') || '';
+                const extVer =
+                  document.documentElement.getAttribute('data-metus-ext-version') || bridgeVer;
                 const isModernBridge =
                   bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
-                if (isAnonymous && bridgeVer !== '1.1.2') {
+                if (isAnonymous && extVer !== '1.1.3' && extVer !== '1.1.2') {
                   addLog(
                     'warn',
-                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${bridgeVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.2 agar tombol Postingan Anonim Facebook diklik otomatis!`
+                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${extVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.3 agar tombol Postingan Anonim Facebook diklik otomatis!`
                   );
                 }
                 window.postMessage(
