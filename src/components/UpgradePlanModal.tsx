@@ -22,7 +22,10 @@ import {
   QrisTransaction,
   PRODUCTION_SITE_URL,
   loadPayPalJsSdk,
-  isPayPalLiveConfigured,
+  getPayPalEnvMode,
+  setPayPalEnvMode,
+  formatPayPalSdkError,
+  PayPalEnvMode,
   apiCreatePayPalOrder,
   apiCheckPayPalStatus,
   apiCapturePayPalOrder,
@@ -98,8 +101,15 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
 
   // PayPal Account Express Approval State
   const [paypalEmail, setPaypalEmail] = React.useState(currentUser?.email || 'buyer-live@paypal.com');
-  const [paypalPassword, setPaypalPassword] = React.useState('paypal2026');
   const [fundingSource, setFundingSource] = React.useState<'balance' | 'paylater'>('balance');
+  const [paypalMode, setPaypalMode] = React.useState<PayPalEnvMode>(() => getPayPalEnvMode());
+  const [paypalSdkError, setPaypalSdkError] = React.useState<string | null>(null);
+
+  const handleSwitchPayPalMode = (mode: PayPalEnvMode) => {
+    setPayPalEnvMode(mode);
+    setPaypalMode(mode);
+    setPaypalSdkError(null);
+  };
 
   React.useEffect(() => {
     if (currentUser?.email) {
@@ -111,22 +121,28 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
   React.useEffect(() => {
     if (!isOpen) {
       setErrorMessage(null);
+      setPaypalSdkError(null);
       setWebhookLog(null);
     }
   }, [isOpen]);
 
+  const txOrderId = transaction?.orderId || '';
+  const txStatus = transaction?.status || '';
+  const txAmountUsd = transaction?.amountUsd || (selectedPlan === 'agency' ? 24.99 : 9.99);
+  const txDescription = transaction?.description || 'Metus Auto-Post Pro Upgrade';
+
   // Load Official PayPal JS SDK & Render Smart Buttons for https://athay04-cloud.github.io/autopost/
   React.useEffect(() => {
-    if (!isOpen || step !== 'paypal_checkout' || !transaction || transaction.status !== 'PENDING') {
+    if (!isOpen || step !== 'paypal_checkout' || !txOrderId || txStatus !== 'PENDING') {
       return;
     }
 
     let cancelled = false;
-    loadPayPalJsSdk().then((ready) => {
+    loadPayPalJsSdk(paypalMode === 'sandbox' ? 'sb' : undefined).then((ready) => {
       if (cancelled || !ready || !window.paypal?.Buttons || !paypalContainerRef.current) return;
       setSdkLoaded(true);
       paypalContainerRef.current.innerHTML = '';
-      const usdVal = (transaction.amountUsd || (selectedPlan === 'agency' ? 24.99 : 9.99)).toFixed(2);
+      const usdVal = Number(txAmountUsd).toFixed(2);
 
       try {
         window.paypal
@@ -138,32 +154,41 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
               label: 'paypal',
               height: 40,
             },
-            createOrder: (_data: any, actions: any) => {
-              return actions.order.create({
-                intent: 'CAPTURE',
-                purchase_units: [
-                  {
-                    reference_id: transaction.orderId,
-                    description: transaction.description,
-                    amount: {
-                      currency_code: 'USD',
-                      value: usdVal,
+            createOrder: async (_data: any, actions: any) => {
+              setPaypalSdkError(null);
+              try {
+                return await actions.order.create({
+                  intent: 'CAPTURE',
+                  purchase_units: [
+                    {
+                      reference_id: txOrderId,
+                      description: txDescription,
+                      amount: {
+                        currency_code: 'USD',
+                        value: usdVal,
+                      },
                     },
-                  },
-                ],
-              });
+                  ],
+                });
+              } catch (err) {
+                setPaypalSdkError(formatPayPalSdkError(err));
+                throw err;
+              }
             },
             onApprove: async (_data: any, actions: any) => {
               const details = await actions.order.capture();
               const payerEmail = details?.payer?.email_address || paypalEmail || 'paypal-live@buyer.com';
-              const res = await apiCapturePayPalOrder(transaction.orderId, {
-                paymentMethod: 'paypal_js_sdk_live',
+              const res = await apiCapturePayPalOrder(txOrderId, {
+                paymentMethod: `paypal_js_sdk_${paypalMode}`,
                 paypalEmail: payerEmail,
               });
               setTransaction(res.transaction);
               if (res.user) {
                 onUpgradeSuccess(res.user, res.transaction);
               }
+            },
+            onError: (err: any) => {
+              setPaypalSdkError(formatPayPalSdkError(err));
             },
           })
           .render(paypalContainerRef.current);
@@ -175,7 +200,7 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, step, transaction, selectedPlan, paypalEmail, onUpgradeSuccess]);
+  }, [isOpen, step, txOrderId, txStatus, txAmountUsd, txDescription, paypalMode]);
 
   // 30-Minute Countdown Timer Effect
   React.useEffect(() => {
@@ -195,19 +220,21 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
     updateTimer();
     const timerId = window.setInterval(updateTimer, 1000);
     return () => window.clearInterval(timerId);
-  }, [isOpen, step, transaction]);
+  }, [isOpen, step, txOrderId, txStatus]);
 
   // Automatic Status Polling Effect (Every 3 seconds while PENDING)
   React.useEffect(() => {
-    if (!isOpen || step !== 'paypal_checkout' || !transaction || transaction.status !== 'PENDING') {
+    if (!isOpen || step !== 'paypal_checkout' || !txOrderId || txStatus !== 'PENDING') {
       return;
     }
 
     const pollInterval = window.setInterval(async () => {
       try {
         setIsPolling(true);
-        const res = await apiCheckPayPalStatus(transaction.orderId);
-        setTransaction(res.transaction);
+        const res = await apiCheckPayPalStatus(txOrderId);
+        if (res.transaction.status !== txStatus) {
+          setTransaction(res.transaction);
+        }
         if (res.transaction.status === 'PAID' && res.user) {
           onUpgradeSuccess(res.user, res.transaction);
         }
@@ -219,7 +246,7 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
     }, 3000);
 
     return () => window.clearInterval(pollInterval);
-  }, [isOpen, step, transaction, onUpgradeSuccess]);
+  }, [isOpen, step, txOrderId, txStatus, onUpgradeSuccess]);
 
   if (!isOpen) return null;
 
@@ -687,25 +714,53 @@ export const UpgradePlanModal: React.FC<UpgradePlanModalProps> = ({
                     </div>
 
                     {/* PayPal Environment Status (Live Real Money vs Sandbox Test) */}
-                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2">
-                      <div className="flex items-center justify-between gap-2">
+                    <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="font-bold text-slate-800 dark:text-slate-200">
                           Status Gateway PayPal:
                         </span>
-                        {isPayPalLiveConfigured() ? (
-                          <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-bold">
-                            ● LIVE (Uang Asli · www.paypal.com)
-                          </span>
-                        ) : (
-                          <span className="px-2.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-700 dark:text-amber-300 text-[11px] font-bold">
-                            ● SANDBOX TEST (www.sandbox.paypal.com)
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1.5 bg-slate-200/70 dark:bg-slate-900 p-1 rounded-lg">
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchPayPalMode('live')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${
+                              paypalMode === 'live'
+                                ? 'bg-emerald-600 text-white'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                          >
+                            ● LIVE (Uang Asli)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchPayPalMode('sandbox')}
+                            className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${
+                              paypalMode === 'sandbox'
+                                ? 'bg-amber-600 text-white'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                            }`}
+                          >
+                            ● SANDBOX TEST
+                          </button>
+                        </div>
                       </div>
-                      {!isPayPalLiveConfigured() && (
-                        <p className="text-[11px] text-amber-800 dark:text-amber-200 leading-relaxed">
-                          Popup PayPal masih membuka <code>www.sandbox.paypal.com</code> (uang simulasi) karena variabel <code>VITE_PAYPAL_CLIENT_ID</code> / <code>PAYPAL_CLIENT_ID</code> belum diisi dengan <strong>Kunci API (Live)</strong> lengkap Anda.
-                        </p>
+
+                      {paypalSdkError && (
+                        <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/70 border border-rose-300 dark:border-rose-700 text-[11px] text-rose-800 dark:text-rose-100 space-y-2 leading-relaxed">
+                          <div className="font-bold text-rose-700 dark:text-rose-300">
+                            ⚠️ Kenapa Popup PayPal Membuka about:blank Lalu Langsung Tertutup?
+                          </div>
+                          <p>{paypalSdkError}</p>
+                          {paypalMode === 'live' && (
+                            <button
+                              type="button"
+                              onClick={() => handleSwitchPayPalMode('sandbox')}
+                              className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] transition-colors"
+                            >
+                              Ganti ke Sandbox Test (sb) Agar Popup Tidak Tertutup →
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
 

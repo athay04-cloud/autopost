@@ -63,18 +63,94 @@ export default function App() {
   const [isCustomBuilderOpen, setIsCustomBuilderOpen] = React.useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = React.useState(false);
   const [isSecretAdminOpen, setIsSecretAdminOpen] = React.useState(false);
-  const [showLandingPage, setShowLandingPage] = React.useState<boolean>(true);
+  const [showLandingPage, setShowLandingPage] = React.useState<boolean>(() => {
+    const hash = window.location.hash.toLowerCase();
+    if (hash.includes('sync_success=')) {
+      return false;
+    }
+    return true;
+  });
   const [currentUser, setCurrentUser] = React.useState<AuthUser | null>(() => {
     return getSavedAuthSession().user;
   });
 
-  // Stealth Secret Admin Triggers: Keyboard (Ctrl+Shift+A / Alt+Shift+A) & URL Hash (#secret-admin)
+  // Helper: Cek apakah nama grup masih berupa placeholder "Grup FB <id>"
+  const isPlaceholderGroupName = React.useCallback((name: string | undefined, id: string): boolean => {
+    if (!name) return true;
+    const t = name.trim();
+    if (!t || t.length < 2) return true;
+    if (t.toLowerCase() === id.toLowerCase()) return true;
+    if (/^grup\s+(fb|facebook|komunitas\s+fb)\b/i.test(t)) return true;
+    return false;
+  }, []);
+
+  // Helper: Ubah slug atau nama placeholder menjadi nama grup yang rapi & mudah dibaca
+  const cleanGroupDisplayName = React.useCallback(
+    (rawName: string | undefined, id: string, fallbackRealName?: string): string => {
+      if (fallbackRealName && !isPlaceholderGroupName(fallbackRealName, id)) {
+        return fallbackRealName.trim();
+      }
+      if (rawName && !isPlaceholderGroupName(rawName, id)) {
+        return rawName.trim();
+      }
+
+      const cleanId = String(id || '').trim();
+      // Jika ID berupa angka murni dan belum ada nama asli
+      if (/^\d+$/.test(cleanId)) {
+        return `Grup Komunitas FB #${cleanId}`;
+      }
+
+      // Jika ID berupa slug teks (contoh: metacryptoasia atau ethtrade.global.indonesia)
+      const spacedSlug = cleanId
+        .replace(/[._-]+/g, ' ')
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(
+          /(meta|crypto|asia|global|indonesia|nusantara|info|kos|kontrakan|jual|beli|loker|lowongan|kerja|komunitas|forum|bisnis|usaha|umkm|properti|rumah|tanah|mobil|motor|otomotif|jakarta|bandung|surabaya|medan|semarang|jogja|yogyakarta|solo|malang|bali|makassar|palembang|bekasi|depok|tangerang|bogor|freelance|digital|marketing|trading|forex|saham|investasi|kuliner|wisata|travel|gamer|gaming|anime| teknologi|programmer|developer|desain)/gi,
+          ' $1 '
+        )
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!spacedSlug) {
+        return `Grup FB ${cleanId}`;
+      }
+
+      return spacedSlug
+        .split(' ')
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(' ');
+    },
+    [isPlaceholderGroupName]
+  );
+
+  // Helper: Buat inisial avatar 2 huruf dari nama asli grup (bukan "GR" dari "Grup FB")
+  const computeGroupInitials = React.useCallback((displayName: string, id: string): string => {
+    const stripped = displayName
+      .replace(/^grup\s+(komunitas\s+)?(fb|facebook)\s*#?/i, '')
+      .replace(/[^a-zA-Z0-9\s]/g, ' ')
+      .trim();
+    const words = stripped.split(/\s+/).filter(Boolean);
+    if (words.length >= 2) {
+      return (words[0][0] + words[1][0]).toUpperCase();
+    }
+    if (words.length === 1 && words[0].length >= 2) {
+      return words[0].slice(0, 2).toUpperCase();
+    }
+    return String(id || 'FB').slice(0, 2).toUpperCase();
+  }, []);
+
+  // Stealth Secret Admin Triggers & Extension #sync_success=<count> Hash Trigger
   React.useEffect(() => {
     const checkUrlTrigger = () => {
       const hash = window.location.hash.toLowerCase();
       const search = window.location.search.toLowerCase();
       if (hash === '#secret-admin' || hash === '#admin-vault' || search.includes('vault=admin')) {
         setIsSecretAdminOpen(true);
+      }
+      if (hash.includes('sync_success=')) {
+        setShowLandingPage(false);
+        window.postMessage({ type: 'METUS_REQUEST_SYNC' }, '*');
       }
     };
     checkUrlTrigger();
@@ -100,7 +176,58 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const cleaned = parsed.map((g: any, idx: number) => {
+            const idStr = String(g.id || '');
+            const rawName = String(g.name || '');
+            // Bersihkan jika nama masih "Grup FB <slug>"
+            const isPlace =
+              !rawName ||
+              rawName.toLowerCase() === idStr.toLowerCase() ||
+              /^grup\s+(fb|facebook|komunitas\s+fb)\b/i.test(rawName);
+            let finalName = rawName;
+            if (isPlace) {
+              if (/^\d+$/.test(idStr)) {
+                finalName = `Grup Komunitas FB #${idStr}`;
+              } else {
+                finalName = idStr
+                  .replace(/[._-]+/g, ' ')
+                  .replace(/([a-z])([A-Z])/g, '$1 $2')
+                  .replace(
+                    /(meta|crypto|asia|global|indonesia|nusantara|info|kos|kontrakan|jual|beli|loker|lowongan|kerja|komunitas|forum|bisnis|usaha|umkm|properti|rumah|tanah|mobil|motor|otomotif|jakarta|bandung|surabaya|medan|semarang|jogja|yogyakarta|solo|malang|bali|makassar|palembang|bekasi|depok|tangerang|bogor|freelance|digital|marketing|trading|forex|saham|investasi|kuliner|wisata|travel|gamer|gaming|anime|teknologi|programmer|developer|desain)/gi,
+                    ' $1 '
+                  )
+                  .replace(/\s+/g, ' ')
+                  .trim()
+                  .split(' ')
+                  .filter(Boolean)
+                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+                  .join(' ');
+              }
+            }
+            const stripped = finalName
+              .replace(/^grup\s+(komunitas\s+)?(fb|facebook)\s*#?/i, '')
+              .replace(/[^a-zA-Z0-9\s]/g, ' ')
+              .trim();
+            const words = stripped.split(/\s+/).filter(Boolean);
+            const avatarText =
+              words.length >= 2
+                ? (words[0][0] + words[1][0]).toUpperCase()
+                : words.length === 1 && words[0].length >= 2
+                ? words[0].slice(0, 2).toUpperCase()
+                : idStr.slice(0, 2).toUpperCase();
+
+            return {
+              ...g,
+              id: idStr,
+              name: finalName || rawName,
+              avatarText,
+              avatarBg: g.avatarBg || (idx % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600'),
+            };
+          });
+          localStorage.setItem('metus_saved_groups', JSON.stringify(cleaned));
+          return cleaned;
+        }
       } catch {
         // fallback
       }
@@ -146,9 +273,7 @@ export default function App() {
     const handleExtensionSync = (event: MessageEvent) => {
       if (event.data && event.data.type === 'METUS_EXTENSION_SYNC') {
         const now = Date.now();
-        if (now - lastSyncTimeRef.current < 3000) {
-          return;
-        }
+        const shouldLogSync = now - lastSyncTimeRef.current >= 2500;
         lastSyncTimeRef.current = now;
 
         const { userId, groups: syncedGroups } = event.data;
@@ -173,28 +298,46 @@ export default function App() {
         }
 
         if (Array.isArray(syncedGroups) && syncedGroups.length > 0) {
-          const formatted: FacebookGroup[] = syncedGroups.map((g: any, idx: number) => ({
-            id: String(g.id),
-            name: g.name || `Grup Facebook ${g.id}`,
-            category: 'community',
-            memberCount: 'Aktif',
-            membersNumeric: 1000,
-            privacy: 'public',
-            role: 'member',
-            avatarBg: idx % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600',
-            avatarText: (g.name ? g.name.slice(0, 2) : 'FB').toUpperCase(),
-            allowAnonymous: true,
-            joinedYear: 2024,
-          }));
-
           setGroups((prev) => {
+            const prevNameMap = new Map<string, string>();
+            prev.forEach((p) => {
+              if (!isPlaceholderGroupName(p.name, p.id)) {
+                prevNameMap.set(p.id, p.name);
+              }
+            });
+
+            const formatted: FacebookGroup[] = syncedGroups.map((g: any, idx: number) => {
+              const idStr = String(g.id);
+              const bestName = cleanGroupDisplayName(g.name, idStr, prevNameMap.get(idStr));
+              return {
+                id: idStr,
+                name: bestName,
+                category: 'community',
+                memberCount: 'Aktif',
+                membersNumeric: 1000,
+                privacy: 'public',
+                role: 'member',
+                avatarBg: idx % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600',
+                avatarText: computeGroupInitials(bestName, idStr),
+                allowAnonymous: true,
+                joinedYear: 2024,
+              };
+            });
+
             const existingIds = new Set(formatted.map((f) => f.id));
             const merged = [...formatted, ...prev.filter((p) => !existingIds.has(p.id))];
             localStorage.setItem('metus_saved_groups', JSON.stringify(merged));
             return merged;
           });
-          setSelectedGroupIds((prev) => (prev.length > 0 ? prev : formatted.map((f) => f.id)));
-          addLog('success', `Ekstensi Chrome berhasil menyinkronkan ${formatted.length} grup Facebook asli ke dashboard!`);
+          setSelectedGroupIds((prev) =>
+            prev.length > 0 ? prev : syncedGroups.map((f: any) => String(f.id))
+          );
+          if (shouldLogSync) {
+            addLog(
+              'success',
+              `Ekstensi Chrome berhasil menyinkronkan ${syncedGroups.length} grup Facebook beserta nama grup ke dashboard!`
+            );
+          }
         }
       } else if (event.data && event.data.type === 'METUS_POST_COMPLETED') {
         const { groupId, resultId, success, postUrl, error, message } = event.data;

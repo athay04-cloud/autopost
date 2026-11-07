@@ -19,7 +19,10 @@ import {
   safeFetchJson,
   apiHybridSimulatePaid,
   loadPayPalJsSdk,
-  isPayPalLiveConfigured,
+  getPayPalEnvMode,
+  setPayPalEnvMode,
+  formatPayPalSdkError,
+  PayPalEnvMode,
 } from '../services/paymentAuthService';
 
 interface SaaSLandingPageProps {
@@ -240,9 +243,15 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
   const [openFaqIndex, setOpenFaqIndex] = React.useState<number | null>(0);
 
   // PayPal Account Express States
-  const [paypalBuyerEmail, setPaypalBuyerEmail] = React.useState('buyer-live@paypal.com');
-  const [paypalBuyerPassword, setPaypalBuyerPassword] = React.useState('paypal2026');
+  const [paypalMode, setPaypalMode] = React.useState<PayPalEnvMode>(() => getPayPalEnvMode());
+  const [paypalSdkError, setPaypalSdkError] = React.useState<string | null>(null);
   const paypalLandingBtnRef = React.useRef<HTMLDivElement | null>(null);
+
+  const handleSwitchPayPalMode = (mode: PayPalEnvMode) => {
+    setPayPalEnvMode(mode);
+    setPaypalMode(mode);
+    setPaypalSdkError(null);
+  };
 
   const openCheckout = (tier: 'pro' | 'agency') => {
     setSelectedTier(tier);
@@ -250,6 +259,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
     const newOrderId = `PP-${prefix}-${Date.now().toString().slice(-6)}`;
     setOrderId(newOrderId);
     setPaymentStatus('PENDING');
+    setPaypalSdkError(null);
     setCountdownSeconds(30 * 60);
     setIsCheckoutOpen(true);
   };
@@ -267,7 +277,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
         ? '24.99'
         : '18.99';
 
-    loadPayPalJsSdk().then((ready) => {
+    loadPayPalJsSdk(paypalMode === 'sandbox' ? 'sb' : undefined).then((ready) => {
       if (cancelled || !ready || !window.paypal?.Buttons || !paypalLandingBtnRef.current) return;
       paypalLandingBtnRef.current.innerHTML = '';
       try {
@@ -280,26 +290,35 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
               label: 'paypal',
               height: 40,
             },
-            createOrder: (_data: any, actions: any) => {
-              return actions.order.create({
-                intent: 'CAPTURE',
-                purchase_units: [
-                  {
-                    reference_id: orderId,
-                    description: `Metus Auto-Post (${selectedTier.toUpperCase()})`,
-                    amount: {
-                      currency_code: 'USD',
-                      value: rawUsd,
+            createOrder: async (_data: any, actions: any) => {
+              setPaypalSdkError(null);
+              try {
+                return await actions.order.create({
+                  intent: 'CAPTURE',
+                  purchase_units: [
+                    {
+                      reference_id: orderId,
+                      description: `Metus Auto-Post (${selectedTier.toUpperCase()})`,
+                      amount: {
+                        currency_code: 'USD',
+                        value: rawUsd,
+                      },
                     },
-                  },
-                ],
-              });
+                  ],
+                });
+              } catch (err) {
+                setPaypalSdkError(formatPayPalSdkError(err));
+                throw err;
+              }
             },
             onApprove: async (_data: any, actions: any) => {
               await actions.order.capture();
-              await apiHybridSimulatePaid(orderId, 'paypal_js_sdk_live');
+              await apiHybridSimulatePaid(orderId, `paypal_js_sdk_${paypalMode}`);
               setPaymentStatus('PAID');
-              onUpgradeCompleted(orderId, 'paypal_js_sdk_live');
+              onUpgradeCompleted(orderId, `paypal_js_sdk_${paypalMode}`);
+            },
+            onError: (err: any) => {
+              setPaypalSdkError(formatPayPalSdkError(err));
             },
           })
           .render(paypalLandingBtnRef.current);
@@ -311,7 +330,7 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [isCheckoutOpen, paymentStatus, selectedTier, billingCycle, orderId, onUpgradeCompleted]);
+  }, [isCheckoutOpen, paymentStatus, selectedTier, billingCycle, orderId, paypalMode]);
 
   // 30-Minute Countdown Timer
   React.useEffect(() => {
@@ -918,25 +937,52 @@ export const SaaSLandingPage: React.FC<SaaSLandingPageProps> = ({
 
                   {/* PayPal Official Smart Buttons & Mode Status (Live vs Sandbox) */}
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2 font-semibold text-white">
                         <Globe className="w-4 h-4 text-sky-400" />
                         <span>PayPal Express Checkout</span>
                       </div>
-                      {isPayPalLiveConfigured() ? (
-                        <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold">
-                          ● LIVE (Real Money · www.paypal.com)
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[11px] font-bold">
-                          ● SANDBOX TEST (www.sandbox.paypal.com)
-                        </span>
-                      )}
+                      <div className="flex items-center gap-1.5 bg-slate-900 p-1 rounded-lg border border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => handleSwitchPayPalMode('live')}
+                          className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${
+                            paypalMode === 'live'
+                              ? 'bg-emerald-600 text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          ● LIVE (Real Money)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSwitchPayPalMode('sandbox')}
+                          className={`px-2.5 py-1 rounded text-[11px] font-bold transition-colors ${
+                            paypalMode === 'sandbox'
+                              ? 'bg-amber-600 text-white'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          ● SANDBOX TEST
+                        </button>
+                      </div>
                     </div>
 
-                    {!isPayPalLiveConfigured() && (
-                      <div className="p-2.5 rounded-lg bg-amber-950/50 border border-amber-800/60 text-[11px] text-amber-200 leading-relaxed">
-                        Saat ini masih menggunakan Client ID <code>sb</code> (<strong>Sandbox / Simulasi</strong> — belum menerima uang asli). Untuk menerima uang asli di <code>www.paypal.com</code>, salin penuh <strong>Kunci API (Live)</strong> dari dashboard PayPal Anda ke <code>VITE_PAYPAL_CLIENT_ID</code> / <code>PAYPAL_CLIENT_ID</code>.
+                    {paypalSdkError && (
+                      <div className="p-3 rounded-xl bg-rose-950/70 border border-rose-700/80 text-[11px] text-rose-100 space-y-2 leading-relaxed">
+                        <div className="font-bold text-rose-300">
+                          ⚠️ Kenapa Popup PayPal Membuka about:blank Lalu Langsung Tertutup?
+                        </div>
+                        <p>{paypalSdkError}</p>
+                        {paypalMode === 'live' && (
+                          <button
+                            type="button"
+                            onClick={() => handleSwitchPayPalMode('sandbox')}
+                            className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] transition-colors"
+                          >
+                            Ganti ke Sandbox Test (sb) Agar Popup Tidak Tertutup →
+                          </button>
+                        )}
                       </div>
                     )}
 

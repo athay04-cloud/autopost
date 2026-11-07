@@ -16,6 +16,7 @@ import {
   Sparkles,
   ExternalLink,
   PlusCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { AddCustomGroupsModal } from './AddCustomGroupsModal';
 
@@ -46,6 +47,13 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
   const [pageSize, setPageSize] = React.useState(6);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = React.useState(false);
+  const [isRescanning, setIsRescanning] = React.useState(false);
+
+  const handleRescanExtensionGroups = () => {
+    setIsRescanning(true);
+    window.postMessage({ type: 'METUS_REQUEST_SYNC' }, '*');
+    setTimeout(() => setIsRescanning(false), 2500);
+  };
 
   // Compute counts
   const totalCount = groups.length;
@@ -122,19 +130,31 @@ export const GroupSelector: React.FC<GroupSelectorProps> = ({
 
         {/* Dropdown Preset & Add Real Group Action */}
         <div>
-          <div className="flex items-center justify-between mb-1">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1">
             <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
               Koleksi / Preset Tersimpan:
             </label>
-            <button
-              type="button"
-              onClick={() => setIsAddModalOpen(true)}
-              className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 cursor-pointer bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-900/50"
-              title="Masukkan link atau ID grup Facebook asli Anda"
-            >
-              <PlusCircle className="w-3 h-3" />
-              <span>+ Tambah Grup Asli</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={handleRescanExtensionGroups}
+                disabled={isRescanning}
+                className="text-[11px] font-bold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 dark:hover:text-emerald-300 flex items-center gap-1 cursor-pointer bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-900/50 disabled:opacity-60"
+                title="Scan ulang nama grup asli dari tab Facebook via Ekstensi Chrome"
+              >
+                <RefreshCw className={`w-3 h-3 ${isRescanning ? 'animate-spin' : ''}`} />
+                <span>{isRescanning ? 'Memindai...' : 'Scan Ulang Nama'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsAddModalOpen(true)}
+                className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 flex items-center gap-1 cursor-pointer bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-900/50"
+                title="Masukkan link atau ID grup Facebook asli Anda"
+              >
+                <PlusCircle className="w-3 h-3" />
+                <span>+ Tambah Grup Asli</span>
+              </button>
+            </div>
           </div>
           <div className="relative">
             <select

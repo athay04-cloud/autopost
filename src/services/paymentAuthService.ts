@@ -430,6 +430,7 @@ declare global {
         };
         createOrder: (data: any, actions: any) => Promise<string>;
         onApprove: (data: any, actions: any) => Promise<void>;
+        onCancel?: (data: any) => void;
         onError?: (err: any) => void;
       }) => {
         render: (selectorOrElement: string | HTMLElement) => Promise<void>;
@@ -443,9 +444,27 @@ export const PRODUCTION_SITE_URL = 'https://athay04-cloud.github.io/autopost/';
 export const DEFAULT_LIVE_PAYPAL_CLIENT_ID =
   'BAAEaww49ypRDZfMIBESd0o_OEeDRlZzpNdDLeV0cC3Qh7qj2Z4WEskpGc8J-LA9Ux4ND0JHkY_C7XaaFU';
 
+const PAYPAL_MODE_STORAGE_KEY = 'metus_paypal_env_mode';
+export type PayPalEnvMode = 'live' | 'sandbox';
+
+export function getPayPalEnvMode(): PayPalEnvMode {
+  if (typeof window === 'undefined') return 'live';
+  const saved = localStorage.getItem(PAYPAL_MODE_STORAGE_KEY);
+  return saved === 'sandbox' ? 'sandbox' : 'live';
+}
+
+export function setPayPalEnvMode(mode: PayPalEnvMode): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(PAYPAL_MODE_STORAGE_KEY, mode);
+}
+
 let cachedServerClientId = '';
 
-export function getPayPalClientId(): string {
+export function getPayPalClientId(forceMode?: PayPalEnvMode): string {
+  const mode = forceMode || getPayPalEnvMode();
+  if (mode === 'sandbox') {
+    return 'sb';
+  }
   const envKey = ((import.meta as any)?.env?.VITE_PAYPAL_CLIENT_ID || '').trim();
   if (
     envKey &&
@@ -466,14 +485,34 @@ export function isPayPalLiveConfigured(): boolean {
   return Boolean(cid && cid !== 'sb');
 }
 
+export function formatPayPalSdkError(err: unknown): string {
+  const raw =
+    typeof err === 'string'
+      ? err
+      : (err as any)?.message || JSON.stringify(err || '');
+
+  if (
+    raw.includes('PAYEE_ACCOUNT_RESTRICTED') ||
+    raw.includes('UNPROCESSABLE_ENTITY') ||
+    raw.includes('Create Order') ||
+    raw.includes('Window closed') ||
+    raw.includes('Popup close')
+  ) {
+    return 'Popup PayPal langsung tertutup karena server Live PayPal menolak pembuatan order dengan kode: PAYEE_ACCOUNT_RESTRICTED ("The merchant account is restricted"). Artinya Client ID Live Anda sudah terhubung, namun akun Bisnis PayPal Anda masih memerlukan verifikasi (konfirmasi email/bank/identitas di Resolution Center PayPal) sebelum bisa menerima uang asli. Gunakan tombol "Ganti ke Sandbox Test (sb)" di bawah jika ingin menguji tampilan popup login PayPal sekarang.';
+  }
+
+  return `PayPal Live menolak inisiasi order (${raw.slice(0, 140)}). Akun Merchant PayPal Anda kemungkinan masih memiliki batasan penerimaan dana (PAYEE_ACCOUNT_RESTRICTED). Silakan cek Resolution Center di dashboard PayPal Anda atau gunakan mode Sandbox Test.`;
+}
+
 let paypalSdkPromise: Promise<boolean> | null = null;
 let loadedClientId: string | null = null;
 
 export async function loadPayPalJsSdk(customClientId?: string): Promise<boolean> {
   if (typeof window === 'undefined') return false;
 
-  let clientId = (customClientId || getPayPalClientId()).trim();
-  if (!clientId || clientId === 'sb') {
+  const mode = getPayPalEnvMode();
+  let clientId = (customClientId || getPayPalClientId(mode)).trim();
+  if (!customClientId && mode === 'live' && (!clientId || clientId === 'sb')) {
     try {
       const { ok, data } = await safeFetchJson<{
         success?: boolean;
@@ -502,6 +541,11 @@ export async function loadPayPalJsSdk(customClientId?: string): Promise<boolean>
     const existingScript = document.getElementById('metus-paypal-js-sdk');
     if (existingScript) {
       existingScript.remove();
+    }
+    try {
+      delete (window as any).paypal;
+    } catch {
+      (window as any).paypal = undefined;
     }
     const script = document.createElement('script');
     script.id = 'metus-paypal-js-sdk';

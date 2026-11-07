@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.0.9',
-        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.0.9 (Support Upload Foto Anti-CSP, Single-Text & Anti-Double Post).',
+        version: '1.1.1',
+        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.1.1 (Deep Group Name Resolver 281+ Grup & Direct /autopost/ Sync).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -88,10 +88,117 @@ async function getFacebookSession() {
   });
 }
 
-// 2. Scan grup dari tab Facebook yang sedang terbuka di browser
+// Helper: Cek apakah nama masih berupa placeholder "Grup FB <id>"
+function isPlaceholderGroupName(name, idOrSlug) {
+  if (!name) return true;
+  const trimmed = String(name).trim();
+  if (!trimmed || trimmed.length < 2) return true;
+  if (trimmed.toLowerCase() === String(idOrSlug || "").toLowerCase()) return true;
+  if (/^grup\\s+(komunitas\\s+)?(fb|facebook)\\b/i.test(trimmed)) return true;
+  if (/^komunitas\\s+fb\\s*#/i.test(trimmed)) return true;
+  return false;
+}
+
+// Helper: Rapikan slug grup jika tidak berupa angka murni
+function humanizeGroupSlug(idOrSlug) {
+  const str = String(idOrSlug || "").trim();
+  if (/^\\d+$/.test(str)) {
+    return "Komunitas FB #" + str.slice(0, 8);
+  }
+  const spaced = str
+    .replace(/[._-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/(meta|crypto|asia|global|indonesia|nusantara|info|kos|kontrakan|jual|beli|loker|lowongan|kerja|komunitas|forum|bisnis|usaha|umkm|properti|rumah|tanah|mobil|motor|otomotif|jakarta|bandung|surabaya|medan|semarang|jogja|yogyakarta|solo|malang|bali|makassar|palembang|bekasi|depok|tangerang|bogor|freelance|digital|marketing|trading|forex|saham|investasi|kuliner|wisata|travel|gamer|gaming|anime|teknologi)/gi, " $1 ")
+    .replace(/\\s+/g, " ")
+    .trim();
+  if (!spaced) return str;
+  return spaced
+    .split(" ")
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+// Helper: Ekstrak nama grup asli dari HTML halaman grup Facebook (www.facebook.com / m.facebook.com)
+function extractGroupNameFromHtml(html, groupId) {
+  if (!html) return "";
+
+  function decodeEntities(str) {
+    return String(str || "")
+      .replace(/&amp;/g, "&")
+      .replace(/&#039;/g, "'")
+      .replace(/&#x27;/gi, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/^\\(\\d+\\)\\s*/, "")
+      .replace(/\\s*[|\\-·•]\\s*Facebook\\s*$/i, "")
+      .trim();
+  }
+
+  function isBadTitle(t) {
+    if (!t || t.length < 2 || t.length > 150) return true;
+    if (/^(facebook|grup facebook|facebook groups|masuk|log in|login|error|konten tidak ditemukan|content not found|browser anda tidak didukung|lihat grup|view group)$/i.test(t)) {
+      return true;
+    }
+    if (/^grup\\s+(fb|facebook)\\b/i.test(t)) return true;
+    return false;
+  }
+
+  // 1. Cek <meta property="og:title" content="...">
+  const ogMatch =
+    html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i);
+  if (ogMatch && ogMatch[1]) {
+    const candidate = decodeEntities(ogMatch[1]);
+    if (!isBadTitle(candidate)) return candidate;
+  }
+
+  // 2. Cek JSON Relay untuk Group ID spesifik ini
+  if (groupId) {
+    const escapedId = String(groupId).replace(/[.*+?^$()|[\\]\\\\]/g, "\\\\$&");
+    const rx1 = new RegExp('"id":"' + escapedId + '"[^{}]{0,600}?"name":"([^"\\\\\\\\]*(?:\\\\\\\\.[^"\\\\\\\\]*)*)"', "i");
+    const m1 = html.match(rx1);
+    if (m1 && m1[1]) {
+      try {
+        const parsed = decodeEntities(JSON.parse('"' + m1[1] + '"'));
+        if (!isBadTitle(parsed)) return parsed;
+      } catch (e) {}
+    }
+
+    const rx2 = new RegExp('"name":"([^"\\\\\\\\]*(?:\\\\\\\\.[^"\\\\\\\\]*)*)"[^{}]{0,600}?"id":"' + escapedId + '"', "i");
+    const m2 = html.match(rx2);
+    if (m2 && m2[1]) {
+      try {
+        const parsed = decodeEntities(JSON.parse('"' + m2[1] + '"'));
+        if (!isBadTitle(parsed)) return parsed;
+      } catch (e) {}
+    }
+  }
+
+  // 3. Cek "pageTitle":"..." di dalam SSR payload
+  const ptMatch = html.match(/"pageTitle":"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"/i);
+  if (ptMatch && ptMatch[1]) {
+    try {
+      const parsed = decodeEntities(JSON.parse('"' + ptMatch[1] + '"'));
+      if (!isBadTitle(parsed)) return parsed;
+    } catch (e) {}
+  }
+
+  // 4. Cek <title>...</title>
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\\/title>/i);
+  if (titleMatch && titleMatch[1]) {
+    const candidate = decodeEntities(titleMatch[1]);
+    if (!isBadTitle(candidate)) return candidate;
+  }
+
+  return "";
+}
+
+// 2. Scan grup dari tab Facebook yang sedang terbuka di browser (DOM Ancestor Climber + Full JSON AST Walker)
 async function scanGroupsFromOpenTabs() {
   const tabs = await chrome.tabs.query({ url: "*://*.facebook.com/*" });
-  let extracted = [];
+  const mergedMap = new Map();
 
   for (const tab of tabs) {
     if (!tab.id) continue;
@@ -99,103 +206,464 @@ async function scanGroupsFromOpenTabs() {
       const results = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: () => {
-          const groups = [];
-          const links = document.querySelectorAll('a[href*="/groups/"]');
-          const ignore = [
-            'feed', 'discover', 'joins', 'create', 'notifications', 'beranda',
-            'jelajahi', 'categories', 'search', 'your_groups', 'member-requests',
-            'admin', 'settings', 'insights', 'events', 'members', 'media', 'files'
+          const ignore = new Set([
+            "feed", "discover", "joins", "create", "notifications", "beranda",
+            "jelajahi", "categories", "search", "your_groups", "member-requests",
+            "admin", "settings", "insights", "events", "members", "media", "files",
+            "pinned", "following", "prompts", "announcements", "rules", "buy_sell_discussion"
+          ]);
+
+          const noisePatterns = [
+            /^lihat grup$/i,
+            /^view group$/i,
+            /^kunjungi$/i,
+            /^visit$/i,
+            /^bergabung$/i,
+            /^join$/i,
+            /^keluar$/i,
+            /^pintasan$/i,
+            /^terakhir aktif/i,
+            /^last active/i,
+            /^aktif\\s+\\d+/i,
+            /^postingan baru/i,
+            /^new posts?/i,
+            /^belum dibaca/i,
+            /^unread/i,
+            /^foto profil/i,
+            /^profile picture/i,
+            /^sampul/i,
+            /^grup (publik|privat|pribadi)/i,
+            /^(publik|privat|public|private)$/i,
+            /^semua grup/i,
+            /^grup yang anda/i,
+            /^\\d+([.,]\\d+)?\\s*(rb|jt|k|m)?\\s*(anggota|members?|postingan|posts?)/i,
+            /^\\d+\\s*(mnt|menit|j|jam|hr|hari|mg|minggu|bln|thn|d|h|w|m|y)\\b/i
           ];
 
-          links.forEach((a) => {
-            const href = a.getAttribute('href') || '';
-            const match = href.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
-            if (match && match[1]) {
-              const idOrSlug = match[1].split('?')[0].split('/')[0];
-              if (!ignore.includes(idOrSlug.toLowerCase())) {
-                const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
-                const cleanName = rawText.split('\\n')[0].trim() || ('Grup FB ' + idOrSlug);
-                if (cleanName.length >= 2 && !groups.some((g) => g.id === idOrSlug)) {
-                  groups.push({
-                    id: idOrSlug,
-                    name: cleanName,
-                    url: 'https://www.facebook.com/groups/' + idOrSlug,
-                  });
+          function cleanCandidateLine(raw) {
+            if (!raw) return "";
+            return String(raw)
+              .replace(/\\u00a0/g, " ")
+              .replace(/(?:·|\\||•)?\\s*(?:terakhir aktif|last active)\\s+.*$/i, "")
+              .replace(/(?:·|\\||•)?\\s*\\d+([.,]\\d+)?\\s*(?:rb|jt|k|m)?\\s*(?:anggota|members?).*$/i, "")
+              .replace(/(?:·|\\||•)?\\s*\\d+\\+?\\s*(?:postingan|posts?|belum dibaca|unread).*$/i, "")
+              .replace(/\\s*(?:lihat grup|view group|kunjungi|visit)$/i, "")
+              .trim();
+          }
+
+          function isValidCandidateLine(rawLine, idOrSlug) {
+            const t = cleanCandidateLine(rawLine);
+            if (!t || t.length < 2 || t.length > 140) return false;
+            if (t.toLowerCase() === String(idOrSlug).toLowerCase()) return false;
+            if (/^grup\\s+(komunitas\\s+)?(fb|facebook)\\b/i.test(t)) return false;
+            if (/^komunitas\\s+fb\\s*#/i.test(t)) return false;
+            if (/^https?:\\/\\//i.test(t)) return false;
+            for (const rx of noisePatterns) {
+              if (rx.test(t)) return false;
+            }
+            return true;
+          }
+
+          // A. Recursive JSON AST Walker pada semua <script type="application/json"> di halaman Facebook
+          const jsonNames = new Map();
+          function walkJsonNode(node, depth) {
+            if (!node || typeof node !== "object" || depth > 28) return;
+            if (Array.isArray(node)) {
+              for (let i = 0; i < node.length; i++) {
+                walkJsonNode(node[i], depth + 1);
+              }
+              return;
+            }
+
+            const isGroupType =
+              node.__typename === "Group" ||
+              node.__isGroup === "Group" ||
+              (typeof node.url === "string" && node.url.includes("/groups/")) ||
+              node.group_member_profiles !== undefined ||
+              node.viewer_join_state !== undefined ||
+              node.viewer_post_status !== undefined ||
+              node.last_activity_time !== undefined;
+
+            if (isGroupType && typeof node.name === "string" && node.name.trim().length >= 2) {
+              const gName = node.name.trim();
+              if (node.id && isValidCandidateLine(gName, node.id)) {
+                jsonNames.set(String(node.id), gName);
+              }
+              if (typeof node.url === "string") {
+                const m = node.url.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+                if (m && m[1]) {
+                  const slug = m[1].split("?")[0].split("/")[0];
+                  if (slug && !ignore.has(slug.toLowerCase()) && isValidCandidateLine(gName, slug)) {
+                    jsonNames.set(slug, gName);
+                  }
                 }
               }
             }
+
+            for (const key in node) {
+              if (Object.prototype.hasOwnProperty.call(node, key)) {
+                walkJsonNode(node[key], depth + 1);
+              }
+            }
+          }
+
+          try {
+            const scripts = document.querySelectorAll('script[type="application/json"]');
+            scripts.forEach((sc) => {
+              const txt = sc.textContent || "";
+              if (!txt.includes("Group") && !txt.includes("/groups/")) return;
+              try {
+                const parsed = JSON.parse(txt);
+                walkJsonNode(parsed, 0);
+              } catch (err) {
+                // Fallback regex jika blok JSON terlalu besar
+                const rx1 = /"id":"([0-9]{6,25})"[^{}]{0,400}?"name":"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"/g;
+                let m;
+                while ((m = rx1.exec(txt)) !== null) {
+                  try {
+                    const d = JSON.parse('"' + m[2] + '"').trim();
+                    if (isValidCandidateLine(d, m[1])) jsonNames.set(m[1], d);
+                  } catch (e) {}
+                }
+              }
+            });
+          } catch (e) {}
+
+          // B. Ekstrak dari elemen <a href*="/groups/"> di DOM dengan Ancestor Card Climber (8 level)
+          const groupMap = new Map();
+          const links = document.querySelectorAll('a[href*="/groups/"]');
+
+          function extractBestNameFromAnchor(a, idOrSlug) {
+            if (jsonNames.has(idOrSlug)) {
+              return jsonNames.get(idOrSlug);
+            }
+
+            // 1. Cek teks di dalam elemen <a> itu sendiri (gunakan innerText & textContent agar elemen offscreen tetap terbaca)
+            const directCandidates = [];
+            a.querySelectorAll('[role="heading"], h1, h2, h3, h4, span[dir="auto"], span').forEach((el) => {
+              if (el.querySelector('span[dir="auto"]')) return;
+              const raw = (el.innerText || el.textContent || "").trim();
+              if (raw) raw.split("\\n").forEach((l) => directCandidates.push(l.trim()));
+            });
+            const aText = (a.innerText || a.textContent || "").trim();
+            if (aText) aText.split("\\n").forEach((l) => directCandidates.push(l.trim()));
+            const aria = (a.getAttribute("aria-label") || a.getAttribute("title") || "").trim();
+            if (aria) aria.split("\\n").forEach((l) => directCandidates.push(l.trim()));
+
+            for (const c of directCandidates) {
+              if (isValidCandidateLine(c, idOrSlug)) {
+                return cleanCandidateLine(c);
+              }
+            }
+
+            // 2. Naik ke parent container hingga 8 level selama container hanya merujuk pada 1 grup ini (CometPressable overlay / kartu grup)
+            let curr = a.parentElement;
+            for (let depth = 1; depth <= 8 && curr && curr !== document.body; depth++) {
+              const subLinks = curr.querySelectorAll('a[href*="/groups/"]');
+              const distinctIds = new Set();
+              subLinks.forEach((lnk) => {
+                const m = (lnk.getAttribute("href") || "").match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+                if (m && m[1]) {
+                  const gid = m[1].split("?")[0].split("/")[0];
+                  if (gid && !ignore.has(gid.toLowerCase())) {
+                    distinctIds.add(gid.toLowerCase());
+                  }
+                }
+              });
+
+              if (distinctIds.size > 1) {
+                break;
+              }
+
+              const spanEls = curr.querySelectorAll('[role="heading"], h1, h2, h3, h4, span[dir="auto"], span');
+              for (const el of spanEls) {
+                if (el.querySelector('span[dir="auto"]')) continue;
+                const txt = (el.innerText || el.textContent || "").trim();
+                if (!txt) continue;
+                const lines = txt.split("\\n");
+                for (const l of lines) {
+                  if (isValidCandidateLine(l, idOrSlug)) {
+                    return cleanCandidateLine(l);
+                  }
+                }
+              }
+
+              curr = curr.parentElement;
+            }
+
+            return "";
+          }
+
+          links.forEach((a) => {
+            const href = a.getAttribute("href") || "";
+            const match = href.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+            if (!match || !match[1]) return;
+
+            const idOrSlug = match[1].split("?")[0].split("/")[0];
+            if (!idOrSlug || ignore.has(idOrSlug.toLowerCase())) return;
+
+            const detectedName = extractBestNameFromAnchor(a, idOrSlug);
+            const existing = groupMap.get(idOrSlug);
+
+            if (detectedName) {
+              if (!existing || existing.isPlaceholder) {
+                groupMap.set(idOrSlug, {
+                  id: idOrSlug,
+                  name: detectedName,
+                  url: "https://www.facebook.com/groups/" + idOrSlug,
+                  isPlaceholder: false
+                });
+              }
+            } else if (!existing) {
+              groupMap.set(idOrSlug, {
+                id: idOrSlug,
+                name: "",
+                url: "https://www.facebook.com/groups/" + idOrSlug,
+                isPlaceholder: true
+              });
+            }
           });
-          return groups;
+
+          jsonNames.forEach((name, idOrSlug) => {
+            if (!ignore.has(String(idOrSlug).toLowerCase()) && !groupMap.has(idOrSlug)) {
+              groupMap.set(idOrSlug, {
+                id: idOrSlug,
+                name: name,
+                url: "https://www.facebook.com/groups/" + idOrSlug,
+                isPlaceholder: false
+              });
+            }
+          });
+
+          return Array.from(groupMap.values());
         },
       });
 
       if (results && results[0] && Array.isArray(results[0].result)) {
-        extracted = [...extracted, ...results[0].result];
+        for (const item of results[0].result) {
+          const prev = mergedMap.get(item.id);
+          if (!prev || (prev.isPlaceholder && !item.isPlaceholder && item.name)) {
+            mergedMap.set(item.id, item);
+          }
+        }
       }
     } catch (e) {
       console.warn("Script scan tab skipped:", e);
     }
   }
 
-  // Remove duplicates
-  const unique = [];
-  extracted.forEach((item) => {
-    if (!unique.some(u => u.id === item.id)) {
-      unique.push(item);
-    }
-  });
-
-  return unique;
+  return Array.from(mergedMap.values());
 }
 
 // 3. Scan grup via Fetch HTML & JSON (Multiple fallback endpoints)
 async function fetchGroupsFromNetwork() {
   const endpoints = [
+    "https://www.facebook.com/groups/joins/",
     "https://m.facebook.com/groups/?seemore",
-    "https://mbasic.facebook.com/groups/?seemore",
-    "https://www.facebook.com/groups/joins/"
+    "https://www.facebook.com/groups/feed/"
   ];
 
-  const found = [];
-  const ignore = [
-    'feed', 'discover', 'joins', 'create', 'notifications', 'beranda',
-    'jelajahi', 'categories', 'search', 'your_groups', 'member-requests',
-    'admin', 'settings', 'insights', 'events', 'members', 'media', 'files'
-  ];
+  const foundMap = new Map();
+  const ignore = new Set([
+    "feed", "discover", "joins", "create", "notifications", "beranda",
+    "jelajahi", "categories", "search", "your_groups", "member-requests",
+    "admin", "settings", "insights", "events", "members", "media", "files"
+  ]);
 
   for (const url of endpoints) {
     try {
       const res = await fetch(url, { credentials: "include" });
       const html = await res.text();
 
-      // Pola Regex 1: /groups/slug_or_id/
       const regexLink = /<a[^>]+href="[^"]*\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})[^"]*"[^>]*>([^<]+)<\\/a>/g;
       let m;
       while ((m = regexLink.exec(html)) !== null) {
-        const idOrSlug = m[1].split('?')[0].split('/')[0];
-        if (idOrSlug && !ignore.includes(idOrSlug.toLowerCase())) {
-          const name = m[2].trim();
-          if (name.length > 2 && !found.some(g => g.id === idOrSlug)) {
-            found.push({ id: idOrSlug, name, url: "https://www.facebook.com/groups/" + idOrSlug });
+        const idOrSlug = m[1].split("?")[0].split("/")[0];
+        if (idOrSlug && !ignore.has(idOrSlug.toLowerCase())) {
+          const name = m[2].replace(/&amp;/g, "&").replace(/&#039;/g, "'").replace(/&quot;/g, '"').trim();
+          if (
+            name.length > 2 &&
+            !/^(lihat|kunjungi|gabung|grup fb|view group)/i.test(name) &&
+            (!foundMap.has(idOrSlug) || isPlaceholderGroupName(foundMap.get(idOrSlug).name, idOrSlug))
+          ) {
+            foundMap.set(idOrSlug, {
+              id: idOrSlug,
+              name,
+              url: "https://www.facebook.com/groups/" + idOrSlug,
+              isPlaceholder: false
+            });
           }
         }
       }
 
-      // Pola Regex 2: Embedded Relay GraphQL JSON
-      const regexJson = /"id":"([0-9]{9,25})"[^}]*?"name":"([^"]+)"/g;
+      const regexJson = /"__typename":"Group"[^{}]{0,400}?"id":"([0-9]{6,25})"[^{}]{0,400}?"name":"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"/g;
       while ((m = regexJson.exec(html)) !== null) {
-        if (m[1] && m[2] && !found.some(g => g.id === m[1])) {
-          found.push({ id: m[1], name: m[2], url: "https://www.facebook.com/groups/" + m[1] });
+        if (m[1] && m[2]) {
+          try {
+            const decoded = JSON.parse('"' + m[2] + '"').trim();
+            if (decoded.length > 2 && !foundMap.has(m[1])) {
+              foundMap.set(m[1], {
+                id: m[1],
+                name: decoded,
+                url: "https://www.facebook.com/groups/" + m[1],
+                isPlaceholder: false
+              });
+            }
+          } catch (e) {}
         }
       }
 
-      if (found.length > 0) break;
+      const regexJson2 = /"id":"([0-9]{6,25})"[^{}]{0,350}?"name":"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"/g;
+      while ((m = regexJson2.exec(html)) !== null) {
+        if (m[1] && m[2] && !foundMap.has(m[1])) {
+          try {
+            const decoded = JSON.parse('"' + m[2] + '"').trim();
+            if (decoded.length > 2 && !/^(facebook|lihat grup)$/i.test(decoded)) {
+              foundMap.set(m[1], {
+                id: m[1],
+                name: decoded,
+                url: "https://www.facebook.com/groups/" + m[1],
+                isPlaceholder: false
+              });
+            }
+          } catch (e) {}
+        }
+      }
     } catch (err) {
       console.warn("Fetch failed for " + url, err);
     }
   }
 
-  return found;
+  return Array.from(foundMap.values());
+}
+
+// Fetch judul grup tunggal dari www.facebook.com/groups/<id>
+async function fetchSingleGroupTitle(groupId) {
+  const urls = [
+    "https://www.facebook.com/groups/" + encodeURIComponent(groupId),
+    "https://m.facebook.com/groups/" + encodeURIComponent(groupId)
+  ];
+  for (const u of urls) {
+    try {
+      const r = await fetch(u, {
+        credentials: "include",
+        headers: { Accept: "text/html,application/xhtml+xml" }
+      });
+      const html = await r.text();
+      const extracted = extractGroupNameFromHtml(html, groupId);
+      if (extracted && !isPlaceholderGroupName(extracted, groupId)) {
+        return extracted;
+      }
+    } catch (e) {}
+  }
+  return "";
+}
+
+let isBackgroundNameResolverRunning = false;
+
+// Resolusi progresif di background untuk seluruh grup (bahkan jika ada 281+ grup)
+async function resolveRemainingGroupsInBackground() {
+  if (isBackgroundNameResolverRunning) return;
+  isBackgroundNameResolverRunning = true;
+
+  try {
+    const data = await chrome.storage.local.get(["metus_fb_uid", "metus_groups"]);
+    const groups = Array.isArray(data.metus_groups) ? data.metus_groups : [];
+    const uid = data.metus_fb_uid || null;
+
+    const unresolved = groups.filter((g) => isPlaceholderGroupName(g.name, g.id));
+    if (unresolved.length === 0) {
+      isBackgroundNameResolverRunning = false;
+      return;
+    }
+
+    const batchSize = 6;
+    for (let i = 0; i < unresolved.length; i += batchSize) {
+      const batch = unresolved.slice(i, i + batchSize);
+      let updatedCount = 0;
+
+      await Promise.all(
+        batch.map(async (g) => {
+          const realTitle = await fetchSingleGroupTitle(g.id);
+          if (realTitle) {
+            g.name = realTitle;
+            g.isPlaceholder = false;
+            updatedCount++;
+          }
+        })
+      );
+
+      if (updatedCount > 0) {
+        await chrome.storage.local.set({ metus_groups: groups, metus_last_sync: Date.now() });
+        // Beritahu semua tab dashboard yang sedang terbuka agar langsung ter-update live
+        const dashTabs = await chrome.tabs.query({
+          url: ["https://athay04-cloud.github.io/*", "https://*.run.app/*", "http://localhost:*/*"]
+        });
+        for (const dt of dashTabs) {
+          if (dt.id) {
+            try {
+              chrome.tabs.sendMessage(dt.id, {
+                action: "LIVE_GROUPS_UPDATED",
+                userId: uid,
+                groups: groups
+              });
+            } catch (e) {}
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Background name resolver error:", e);
+  } finally {
+    isBackgroundNameResolverRunning = false;
+  }
+}
+
+// 3B. Resolusi otomatis untuk grup yang namanya masih kosong / "Grup FB <id>"
+async function resolveMissingGroupNames(groups) {
+  try {
+    const netGroups = await fetchGroupsFromNetwork();
+    const netMap = new Map();
+    netGroups.forEach((ng) => {
+      if (ng.name && !isPlaceholderGroupName(ng.name, ng.id)) {
+        netMap.set(ng.id, ng.name);
+      }
+    });
+
+    groups.forEach((g) => {
+      if (isPlaceholderGroupName(g.name, g.id) && netMap.has(g.id)) {
+        g.name = netMap.get(g.id);
+        g.isPlaceholder = false;
+      }
+    });
+  } catch (e) {}
+
+  // Resolusi cepat batch pertama (hingga 24 grup) secara langsung sebelum membuka dashboard
+  const needTitle = groups.filter((g) => isPlaceholderGroupName(g.name, g.id)).slice(0, 24);
+  const batchSize = 8;
+  for (let i = 0; i < needTitle.length; i += batchSize) {
+    const batch = needTitle.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async (g) => {
+        const realTitle = await fetchSingleGroupTitle(g.id);
+        if (realTitle) {
+          g.name = realTitle;
+          g.isPlaceholder = false;
+        }
+      })
+    );
+  }
+
+  return groups.map((g) => {
+    const cleanName = !isPlaceholderGroupName(g.name, g.id)
+      ? g.name.trim()
+      : humanizeGroupSlug(g.id);
+    return {
+      id: g.id,
+      name: cleanName,
+      url: g.url || ("https://www.facebook.com/groups/" + g.id)
+    };
+  });
 }
 
 // 4. Handler Utama Pengambilan Grup
@@ -205,20 +673,50 @@ async function fetchUserFacebookGroups() {
     return { success: false, error: "Belum login di Facebook pada browser Chrome ini." };
   }
 
-  // Coba scan dari tab Facebook yang sedang terbuka dulu
+  const savedData = await chrome.storage.local.get(["metus_groups"]);
+  const existingGroups = Array.isArray(savedData.metus_groups) ? savedData.metus_groups : [];
+  const existingRealNames = new Map();
+  existingGroups.forEach((eg) => {
+    if (eg && eg.id && eg.name && !isPlaceholderGroupName(eg.name, eg.id)) {
+      existingRealNames.set(eg.id, eg.name);
+    }
+  });
+
   let groups = await scanGroupsFromOpenTabs();
 
-  // Jika belum ada tab FB yang terbuka, coba request jaringan
   if (groups.length === 0) {
     groups = await fetchGroupsFromNetwork();
   }
 
-  // Simpan ke storage local ekstensi
+  // Jika tidak ada tab FB terbuka dan masih ada grup tersimpan di storage, perbaiki nama grup yang tersimpan
+  if (groups.length === 0 && existingGroups.length > 0) {
+    groups = existingGroups.map((eg) => ({
+      id: eg.id,
+      name: isPlaceholderGroupName(eg.name, eg.id) ? "" : eg.name,
+      url: eg.url || ("https://www.facebook.com/groups/" + eg.id),
+      isPlaceholder: isPlaceholderGroupName(eg.name, eg.id)
+    }));
+  }
+
+  groups.forEach((g) => {
+    if (isPlaceholderGroupName(g.name, g.id) && existingRealNames.has(g.id)) {
+      g.name = existingRealNames.get(g.id);
+      g.isPlaceholder = false;
+    }
+  });
+
+  groups = await resolveMissingGroupNames(groups);
+
   await chrome.storage.local.set({
     metus_fb_uid: session.userId,
     metus_groups: groups,
     metus_last_sync: Date.now(),
   });
+
+  // Lanjutkan resolusi sisa grup di background jika jumlah grup > 24
+  setTimeout(() => {
+    resolveRemainingGroupsInBackground();
+  }, 500);
 
   return {
     success: true,
@@ -240,10 +738,25 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "GET_SAVED_GROUPS") {
-    chrome.storage.local.get(["metus_fb_uid", "metus_groups"], (data) => {
+    chrome.storage.local.get(["metus_fb_uid", "metus_groups"], async (data) => {
+      const savedList = Array.isArray(data.metus_groups) ? data.metus_groups : [];
+      const hasPlaceholders = savedList.some((g) => isPlaceholderGroupName(g.name, g.id));
+
+      // Jika data tersimpan masih mengandung "Grup FB <id>", langsung jalankan resolusi otomatis
+      if (hasPlaceholders) {
+        const refreshed = await fetchUserFacebookGroups();
+        if (refreshed && refreshed.success && refreshed.groups.length > 0) {
+          sendResponse({
+            userId: refreshed.userId || data.metus_fb_uid || null,
+            groups: refreshed.groups,
+          });
+          return;
+        }
+      }
+
       sendResponse({
         userId: data.metus_fb_uid || null,
-        groups: data.metus_groups || [],
+        groups: savedList,
       });
     });
     return true;
@@ -1248,44 +1761,218 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     content: `// Metus Auto-Post - Content Script untuk Facebook
 console.log("[Metus] Content script injected on Facebook tab.");
 
-// Auto scan grup dan simpan saat membuka Facebook
+// Auto scan grup dan simpan saat membuka Facebook (mengutamakan nama asli grup, bukan "Grup FB <id>")
 function autoScanGroups() {
   const links = document.querySelectorAll('a[href*="/groups/"]');
-  const found = [];
-  const ignore = [
+  const groupMap = new Map();
+  const ignore = new Set([
     'feed', 'discover', 'joins', 'create', 'notifications', 'beranda',
     'jelajahi', 'categories', 'search', 'your_groups', 'member-requests',
-    'admin', 'settings', 'insights', 'events', 'members', 'media', 'files'
+    'admin', 'settings', 'insights', 'events', 'members', 'media', 'files',
+    'pinned', 'following', 'prompts', 'announcements', 'rules'
+  ]);
+
+  const noisePatterns = [
+    /^lihat grup$/i, /^view group$/i, /^kunjungi$/i, /^visit$/i, /^bergabung$/i,
+    /^join$/i, /^keluar$/i, /^terakhir aktif/i, /^last active/i, /^postingan baru/i,
+    /^new posts?/i, /^belum dibaca/i, /^foto profil/i, /^profile picture/i,
+    /^grup (publik|privat|pribadi)/i, /^(publik|privat|public|private)$/i,
+    /^\\d+([.,]\\d+)?\\s*(rb|jt|k|m)?\\s*(anggota|members?)/i,
+    /^semua grup/i, /^grup yang anda/i, /^urutkan/i, /^cari grup/i, /^pintasan/i
   ];
 
-  links.forEach((a) => {
-    const href = a.getAttribute('href') || '';
-    const match = href.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
-    if (match && match[1]) {
-      const idOrSlug = match[1].split('?')[0].split('/')[0];
-      if (!ignore.includes(idOrSlug.toLowerCase())) {
-        const rawText = (a.innerText || a.getAttribute('aria-label') || '').trim();
-        const cleanName = rawText.split('\\n')[0].trim() || ('Grup FB ' + idOrSlug);
+  function stripGroupMetadata(raw) {
+    if (!raw) return '';
+    return String(raw)
+      .replace(/\\s*[·•|]?\\s*(Terakhir aktif|Last active)[^\\n]*/gi, '')
+      .replace(/\\s*(Lihat grup|View group|Kunjungi|Visit)\\s*$/gi, '')
+      .replace(/\\s*[·•|]?\\s*\\d+([.,]\\d+)?\\s*(rb|jt|k|m|ribu|juta)?\\s*(anggota|members?|postingan|posts?)[^\\n]*/gi, '')
+      .replace(/\\s*[·•|]?\\s*\\d+\\+?\\s*(postingan baru|new posts?|belum dibaca|unread)[^\\n]*/gi, '')
+      .replace(/^\\s*[·•|\\-]+\\s*|\\s*[·•|\\-]+\\s*$/g, '')
+      .trim();
+  }
 
-        if (cleanName.length >= 2 && !found.some(g => g.id === idOrSlug)) {
-          found.push({
-            id: idOrSlug,
+  function isValidGroupName(line, idOrSlug) {
+    if (!line) return false;
+    const t = stripGroupMetadata(line);
+    if (t.length < 2 || t.length > 140) return false;
+    if (t.toLowerCase() === String(idOrSlug).toLowerCase()) return false;
+    if (/^\\d+$/.test(t)) return false;
+    if (/^grup\\s+(fb|facebook|komunitas\\s+fb)\\b/i.test(t)) return false;
+    if (/^https?:\\/\\//i.test(t)) return false;
+    for (const rx of noisePatterns) {
+      if (rx.test(t)) return false;
+    }
+    return true;
+  }
+
+  function readElementLines(el) {
+    if (!el) return [];
+    const out = [];
+    const inner = (el.innerText || '').trim();
+    if (inner) {
+      inner.split('\\n').forEach((l) => out.push(l.trim()));
+    }
+    const leafSpans = el.querySelectorAll('span[dir="auto"], [role="heading"], h1, h2, h3, h4, strong');
+    leafSpans.forEach((sp) => {
+      const tc = (sp.textContent || '').trim();
+      if (tc) out.push(tc);
+    });
+    const rawTc = (el.textContent || '').trim();
+    if (rawTc && rawTc.length < 220) {
+      out.push(rawTc);
+    }
+    return out;
+  }
+
+  function findGroupCardContainer(anchor, targetId) {
+    let bestCard = anchor;
+    let curr = anchor.parentElement;
+    for (let depth = 0; depth < 8 && curr && curr !== document.body; depth++) {
+      const subLinks = curr.querySelectorAll('a[href*="/groups/"]');
+      const distinctIds = new Set();
+      subLinks.forEach((sl) => {
+        const h = sl.getAttribute('href') || '';
+        const m = h.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+        if (m && m[1]) {
+          const id = m[1].split('?')[0].split('/')[0];
+          if (id && !ignore.has(id.toLowerCase())) distinctIds.add(id.toLowerCase());
+        }
+      });
+      if (distinctIds.size <= 1) {
+        bestCard = curr;
+        curr = curr.parentElement;
+      } else {
+        break;
+      }
+    }
+    return bestCard;
+  }
+
+  // 1. Parse JSON embedded Facebook Relay terlebih dahulu
+  try {
+    const scripts = document.querySelectorAll('script[type="application/json"], script:not([src])');
+    function walkNode(node) {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) walkNode(node[i]);
+        return;
+      }
+      const isGrp =
+        node.__typename === 'Group' ||
+        node.__isGroup === 'Group' ||
+        (typeof node.url === 'string' && node.url.includes('/groups/'));
+      if (isGrp && typeof node.name === 'string' && node.name.trim().length >= 2) {
+        const cleanName = stripGroupMetadata(node.name);
+        if (node.id && isValidGroupName(cleanName, node.id)) {
+          const gid = String(node.id);
+          groupMap.set(gid, {
+            id: gid,
             name: cleanName,
-            url: 'https://www.facebook.com/groups/' + idOrSlug,
+            url: 'https://www.facebook.com/groups/' + gid,
+            isPlaceholder: false,
           });
+        }
+        if (typeof node.url === 'string') {
+          const um = node.url.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+          if (um && um[1]) {
+            const slug = um[1].split('?')[0].split('/')[0];
+            if (slug && !ignore.has(slug.toLowerCase()) && isValidGroupName(cleanName, slug)) {
+              groupMap.set(slug, {
+                id: slug,
+                name: cleanName,
+                url: 'https://www.facebook.com/groups/' + slug,
+                isPlaceholder: false,
+              });
+            }
+          }
+        }
+      }
+      for (const k in node) {
+        if (Object.prototype.hasOwnProperty.call(node, k)) {
+          const v = node[k];
+          if (v && typeof v === 'object') walkNode(v);
         }
       }
     }
+    scripts.forEach((s) => {
+      const txt = s.textContent || '';
+      if (!txt || (!txt.includes('"Group"') && !txt.includes('/groups/'))) return;
+      if (txt.trim().startsWith('{') || txt.trim().startsWith('[')) {
+        try {
+          walkNode(JSON.parse(txt));
+        } catch (e) {}
+      }
+    });
+  } catch (e) {}
+
+  // 2. Scan DOM dengan 8-Level Ancestor Card Climber
+  links.forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    const match = href.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
+    if (!match || !match[1]) return;
+
+    const idOrSlug = match[1].split('?')[0].split('/')[0];
+    if (!idOrSlug || ignore.has(idOrSlug.toLowerCase())) return;
+
+    const candidates = [];
+    const aria = a.getAttribute('aria-label') || '';
+    if (aria) candidates.push(aria);
+    readElementLines(a).forEach((l) => candidates.push(l));
+
+    const card = findGroupCardContainer(a, idOrSlug);
+    if (card && card !== a) {
+      readElementLines(card).forEach((l) => candidates.push(l));
+    }
+
+    let bestName = '';
+    for (const c of candidates) {
+      const cleaned = stripGroupMetadata(c);
+      if (isValidGroupName(cleaned, idOrSlug)) {
+        bestName = cleaned;
+        break;
+      }
+    }
+
+    const existing = groupMap.get(idOrSlug);
+    if (bestName) {
+      if (!existing || existing.isPlaceholder) {
+        groupMap.set(idOrSlug, {
+          id: idOrSlug,
+          name: bestName,
+          url: 'https://www.facebook.com/groups/' + idOrSlug,
+          isPlaceholder: false,
+        });
+      }
+    } else if (!existing) {
+      const fallbackSlugName = /^\\d+$/.test(idOrSlug)
+        ? 'Grup Komunitas FB #' + idOrSlug
+        : idOrSlug.replace(/[._-]+/g, ' ').replace(/\\b\\w/g, (c) => c.toUpperCase());
+      groupMap.set(idOrSlug, {
+        id: idOrSlug,
+        name: fallbackSlugName,
+        url: 'https://www.facebook.com/groups/' + idOrSlug,
+        isPlaceholder: true,
+      });
+    }
   });
 
+  const found = Array.from(groupMap.values());
   if (found.length > 0) {
     chrome.storage.local.get(["metus_groups"], (data) => {
-      const existing = data.metus_groups || [];
-      const merged = [...existing];
-      found.forEach(f => {
-        if (!merged.some(m => m.id === f.id)) merged.push(f);
+      const existing = Array.isArray(data.metus_groups) ? data.metus_groups : [];
+      const mergedMap = new Map();
+      existing.forEach((g) => {
+        if (g && g.id) mergedMap.set(g.id, g);
       });
-      chrome.storage.local.set({ metus_groups: merged });
+      found.forEach((f) => {
+        const prev = mergedMap.get(f.id);
+        const prevIsPlaceholder = !prev || !prev.name || /^grup\\s+(fb|facebook|komunitas\\s+fb)\\b/i.test(prev.name) || prev.name === f.id;
+        if (!prev || (prevIsPlaceholder && !f.isPlaceholder)) {
+          mergedMap.set(f.id, { id: f.id, name: f.name, url: f.url });
+        }
+      });
+      chrome.storage.local.set({ metus_groups: Array.from(mergedMap.values()) });
     });
   }
 }
@@ -1536,28 +2223,88 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   },
   {
     name: 'dashboard_bridge.js',
-    description: 'Content script yang menyuntikkan data grup tersimpan langsung ke Web Dashboard athay04-cloud.github.io',
-    content: `// Metus Extension Bridge v1.0.9 untuk Dashboard (DOM-Level Cross-Extension Singleton Guard + Photo Upload Support)
-// Menggunakan atribut pada document.documentElement agar meskipun ada >1 ekstensi atau injeksi berulang,
-// HANYA 1 instance bridge yang aktif dan TIDAK AKAN PERNAH mengirim perintah posting 2 kali!
+    description: 'Content script yang menyuntikkan data grup tersimpan langsung ke Web Dashboard athay04-cloud.github.io/autopost/',
+    content: `// Metus Extension Bridge v1.1.1 untuk Dashboard (Auto-Redirect /autopost/ + Anti-Throttle Sync + Live LocalStorage Cleaner)
+if (
+  window.location.hostname === "athay04-cloud.github.io" &&
+  !window.location.pathname.startsWith("/autopost")
+) {
+  const targetUrl = "https://athay04-cloud.github.io/autopost/" + (window.location.search || "") + (window.location.hash || "");
+  window.location.replace(targetUrl);
+}
+
 if (
   !window.__metus_dashboard_bridge_loaded &&
-  document.documentElement.getAttribute("data-metus-bridge-version") !== "1.0.9"
+  document.documentElement.getAttribute("data-metus-bridge-version") !== "1.1.1"
 ) {
   window.__metus_dashboard_bridge_loaded = true;
   document.documentElement.setAttribute("data-metus-bridge-active", "1");
-  document.documentElement.setAttribute("data-metus-bridge-version", "1.0.9");
-  console.log("[Metus Bridge v1.0.9] Connecting extension data to Web Dashboard (Photo Upload & Anti-Double Post Lock Active)...");
+  document.documentElement.setAttribute("data-metus-bridge-version", "1.1.1");
+  console.log("[Metus Bridge v1.1.1] Connecting extension data to Web Dashboard...");
+
+  let lastBridgePostTime = 0;
+  let pendingSyncTimer = null;
+
+  // Bersihkan langsung localStorage "metus_saved_groups" di situs GitHub Pages agar entri lama "Grup FB <id>" tergantikan
+  function syncToLocalStorageAndPostMessage(userId, groups) {
+    if (!Array.isArray(groups) || groups.length === 0) return;
+
+    try {
+      const formattedForStorage = groups.map((g, idx) => {
+        const idStr = String(g.id || "");
+        const nameStr = String(g.name || idStr).trim();
+        const words = nameStr.replace(/^(grup|komunitas)\\s+(fb|facebook)\\s*#?/i, "").trim().split(/\\s+/).filter(Boolean);
+        const initials = words.length >= 2
+          ? (words[0][0] + words[1][0]).toUpperCase()
+          : words.length === 1 && words[0].length >= 2
+          ? words[0].slice(0, 2).toUpperCase()
+          : idStr.slice(0, 2).toUpperCase();
+
+        return {
+          id: idStr,
+          name: nameStr,
+          category: "community",
+          memberCount: "Aktif",
+          membersNumeric: 1000,
+          privacy: "public",
+          role: "member",
+          avatarBg: idx % 2 === 0 ? "bg-blue-600" : "bg-emerald-600",
+          avatarText: initials,
+          allowAnonymous: true,
+          joinedYear: 2024
+        };
+      });
+      localStorage.setItem("metus_saved_groups", JSON.stringify(formattedForStorage));
+    } catch (e) {}
+
+    // Hindari throttle 3000ms pada bundle lama di athay04-cloud.github.io/autopost/
+    const now = Date.now();
+    const elapsed = now - lastBridgePostTime;
+    const delay = lastBridgePostTime === 0 || elapsed >= 3150 ? 0 : 3150 - elapsed;
+
+    if (pendingSyncTimer) clearTimeout(pendingSyncTimer);
+    pendingSyncTimer = setTimeout(() => {
+      lastBridgePostTime = Date.now();
+      window.postMessage({
+        type: "METUS_EXTENSION_SYNC",
+        userId: userId,
+        groups: groups,
+        bridgeVersion: "1.1.1",
+      }, "*");
+    }, delay);
+  }
 
   // Ambil sesi & grup tersimpan dari background
   chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
     if (data && data.groups && data.groups.length > 0) {
-      window.postMessage({
-        type: "METUS_EXTENSION_SYNC",
-        userId: data.userId,
-        groups: data.groups,
-        bridgeVersion: "1.0.9",
-      }, "*");
+      syncToLocalStorageAndPostMessage(data.userId, data.groups);
+    }
+  });
+
+  // Terima live update dari background saat nama grup selesai di-resolve bertahap
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.action === "LIVE_GROUPS_UPDATED" && Array.isArray(msg.groups)) {
+      syncToLocalStorageAndPostMessage(msg.userId, msg.groups);
     }
   });
 
@@ -1569,12 +2316,9 @@ if (
 
     if (event.data.type === "METUS_REQUEST_SYNC") {
       chrome.runtime.sendMessage({ action: "FETCH_MY_GROUPS" }, (res) => {
-        window.postMessage({
-          type: "METUS_EXTENSION_SYNC",
-          userId: res?.userId,
-          groups: res?.groups || [],
-          bridgeVersion: "1.0.9",
-        }, "*");
+        if (res && Array.isArray(res.groups) && res.groups.length > 0) {
+          syncToLocalStorageAndPostMessage(res.userId, res.groups);
+        }
       });
     }
 
@@ -1756,8 +2500,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnOpenFbGroups = document.getElementById("btnOpenFbGroups");
   const btnOpenDashboard = document.getElementById("btnOpenDashboard");
 
-  // Alamat Web Dashboard Resmi Athay04
-  const DASHBOARD_URL = "https://athay04-cloud.github.io/autopost/";
+  // Pastikan URL selalu mengarah ke https://athay04-cloud.github.io/autopost/ (bukan root github.io)
+  function normalizeDashboardUrl(rawUrl) {
+    let url = (rawUrl || "https://athay04-cloud.github.io/autopost/").trim();
+    if (url.includes("athay04-cloud.github.io") && !url.includes("/autopost")) {
+      url = "https://athay04-cloud.github.io/autopost/";
+    }
+    if (!url.endsWith("/")) {
+      url += "/";
+    }
+    return url;
+  }
+
+  const DASHBOARD_URL = normalizeDashboardUrl("https://athay04-cloud.github.io/autopost/");
 
   // 1. Cek status sesi login & grup yang sudah tersimpan
   chrome.runtime.sendMessage({ action: "CHECK_FB_STATUS" }, (response) => {
@@ -1780,7 +2535,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // 2. Tombol Scan & Sinkronkan Grup
   btnSync.addEventListener("click", () => {
-    btnSync.textContent = "Memindai Grup Facebook...";
+    btnSync.textContent = "Memindai Nama Grup Facebook...";
     btnSync.disabled = true;
 
     chrome.runtime.sendMessage({ action: "FETCH_MY_GROUPS" }, (res) => {
@@ -1792,9 +2547,10 @@ document.addEventListener("DOMContentLoaded", () => {
         groupCountDisplay.textContent = count + " grup tersimpan";
 
         if (count > 0) {
-          alert("Sukses! Berhasil mendeteksi " + count + " grup dari akun Facebook Anda! Mengarahkan ke Dashboard...");
-          // Buka langsung web dashboard dengan parameter sync
-          chrome.tabs.create({ url: DASHBOARD_URL + "#sync_success=" + count });
+          const syncTargetUrl = DASHBOARD_URL + "#sync_success=" + count;
+          alert("Sukses! Berhasil mendeteksi " + count + " grup beserta nama aslinya! Mengarahkan ke " + syncTargetUrl);
+          // Buka langsung https://athay04-cloud.github.io/autopost/#sync_success=<count>
+          chrome.tabs.create({ url: syncTargetUrl });
         } else {
           const buka = confirm(
             "Belum mendeteksi grup dari background. Apakah Anda ingin membuka tab Facebook Groups (facebook.com/groups/joins/) sekarang agar ekstensi dapat mendeteksi grup secara otomatis?"
@@ -2051,13 +2807,21 @@ export async function downloadExtensionZip(
 ): Promise<void> {
   const zip = new JSZip();
 
+  let cleanTargetUrl = (dashboardUrl || DEFAULT_DASHBOARD_URL).trim();
+  if (cleanTargetUrl.includes('athay04-cloud.github.io') && !cleanTargetUrl.includes('/autopost')) {
+    cleanTargetUrl = 'https://athay04-cloud.github.io/autopost/';
+  }
+  if (!cleanTargetUrl.endsWith('/')) {
+    cleanTargetUrl += '/';
+  }
+
   for (const file of EXTENSION_FILES) {
     let content = file.content;
-    if (dashboardUrl) {
+    if (cleanTargetUrl) {
       // Replace default URL if customized
       content = content.replace(
         new RegExp('https://athay04-cloud.github.io/autopost/', 'g'),
-        dashboardUrl
+        cleanTargetUrl
       );
     }
     zip.file(file.name, content);

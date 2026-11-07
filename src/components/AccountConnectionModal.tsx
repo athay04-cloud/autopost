@@ -234,7 +234,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/20 text-white">
                       Manifest V3 Ready
                     </span>
-                    <span className="text-xs opacity-90 font-medium">Versi 1.0.8 (Fix 1x Ketik Teks & Anti-Double Post)</span>
+                    <span className="text-xs opacity-90 font-medium">Versi 1.1.1 (Deep Ancestor Card Climber + Live Group Title Resolver)</span>
                   </div>
                   <h3 className="text-lg font-bold">
                     metus-auto-post-chrome-extension.zip
@@ -263,7 +263,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                   ) : (
                     <>
                       <Download className="w-4 h-4 text-blue-600" />
-                      <span>Download ZIP v1.0.8 (Terbaru)</span>
+                      <span>Download ZIP v1.1.1 (Terbaru)</span>
                     </>
                   )}
                 </button>
@@ -274,15 +274,15 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                 <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs space-y-1">
                   <div className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
-                    <span>⚡ Pembaruan v1.0.8: Fix Teks "halohalohalo" & Fix Double Post</span>
-                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">Single-Shot Lexical</span>
+                    <span>⚡ Pembaruan v1.1.1: Fix Nama Grup ID Angka (3168537...) &amp; Live Background Name Resolver</span>
+                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">v1.1.1 Fix</span>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
-                    <strong>1. Fix Teks Berulang 3x ("halohalohalo"):</strong> Menghapus fallback 3-lapis (execCommand + paste + beforeinput) yang mengantre 3x di Lexical saat jendela background tidak fokus. Kini injeksi teks dikunci 1x + dilengkapi <em>Self-Healing</em> otomatis.
+                    <strong>1. Fix Nama Grup ID Numerik (316853758787323, dll.):</strong> Menambahkan <em>8-Level Ancestor Card Climber</em> + pembacaan <code>textContent</code> (untuk melewati pembatasan <code>content-visibility: auto</code> Chrome) serta pemindaian pohon JSON Relay Facebook dan <code>og:title</code> dari <code>www.facebook.com/groups/&lt;id&gt;</code> secara otomatis untuk seluruh 281+ grup Anda.
                     <br />
-                    <strong>2. Fix Kirim 2 Kali (Double Post):</strong> Mengganti event <code>mousedown+mouseup+click</code> pada tombol Kirim Facebook (<code>CometPressable</code>) menjadi 1x klik tunggal, serta memasang <em>DOM Mutex Lock</em> lintas ekstensi.
+                    <strong>2. Fix Redirect &amp; Auto-Overwrite Cache Lama:</strong> Mengunci redirect ke <code>https://athay04-cloud.github.io/autopost/#sync_success=...</code> dan langsung menimpa cache lama di <code>localStorage</code>.
                     <br />
-                    <strong>PENTING:</strong> Setelah mengunduh ZIP v1.0.8 ini, buka <code>chrome://extensions</code>, <strong>Remove (Hapus)</strong> ekstensi Metus versi lama terlebih dahulu, lalu klik <strong>Load unpacked</strong> pada folder v1.0.8 baru dan <strong>Refresh halaman Dashboard ini</strong>.
+                    <strong>PENTING:</strong> Unduh <strong>ZIP v1.1.1</strong> dari tombol di atas, ekstrak dan pasang di <code>chrome://extensions</code> (Load unpacked), lalu klik <strong>1. Scan &amp; Sinkronkan Grup Facebook</strong> saat tab <code>facebook.com/groups/joins/</code> terbuka.
                   </div>
                 </div>
               </div>
