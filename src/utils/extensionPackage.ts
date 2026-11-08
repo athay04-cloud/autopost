@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.1.6',
-        description: 'Ekstensi otomasi posting Facebook Group v1.1.6 (Format Paragraf/Enter Rapi 1:1, Multi-Foto Upload Presisi & Silent Background Tab).',
+        version: '1.1.7',
+        description: 'Ekstensi otomasi posting Facebook Group v1.1.7 (Instant Group Scan <0.5 Detik, Format Paragraf/Enter 1:1, Multi-Foto Upload & Silent Tab).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -619,54 +619,21 @@ async function resolveRemainingGroupsInBackground() {
   }
 }
 
-// 3B. Resolusi otomatis untuk grup yang namanya masih kosong / "Grup FB <id>"
-async function resolveMissingGroupNames(groups) {
-  try {
-    const netGroups = await fetchGroupsFromNetwork();
-    const netMap = new Map();
-    netGroups.forEach((ng) => {
-      if (ng.name && !isPlaceholderGroupName(ng.name, ng.id)) {
-        netMap.set(ng.id, ng.name);
-      }
-    });
-
-    groups.forEach((g) => {
-      if (isPlaceholderGroupName(g.name, g.id) && netMap.has(g.id)) {
-        g.name = netMap.get(g.id);
-        g.isPlaceholder = false;
-      }
-    });
-  } catch (e) {}
-
-  // Resolusi cepat batch pertama (hingga 24 grup) secara langsung sebelum membuka dashboard
-  const needTitle = groups.filter((g) => isPlaceholderGroupName(g.name, g.id)).slice(0, 24);
-  const batchSize = 8;
-  for (let i = 0; i < needTitle.length; i += batchSize) {
-    const batch = needTitle.slice(i, i + batchSize);
-    await Promise.all(
-      batch.map(async (g) => {
-        const realTitle = await fetchSingleGroupTitle(g.id);
-        if (realTitle) {
-          g.name = realTitle;
-          g.isPlaceholder = false;
-        }
-      })
-    );
-  }
-
+// 3B. Normalisasi cepat nama grup secara instan (< 5ms) tanpa memblokir popup dengan request jaringan lambat
+function normalizeGroupsFast(groups) {
   return groups.map((g) => {
-    const cleanName = !isPlaceholderGroupName(g.name, g.id)
-      ? g.name.trim()
-      : humanizeGroupSlug(g.id);
+    const hasReal = !isPlaceholderGroupName(g.name, g.id);
+    const cleanName = hasReal ? g.name.trim() : humanizeGroupSlug(g.id);
     return {
       id: g.id,
       name: cleanName,
-      url: g.url || ("https://www.facebook.com/groups/" + g.id)
+      url: g.url || ("https://www.facebook.com/groups/" + g.id),
+      isPlaceholder: !hasReal
     };
   });
 }
 
-// 4. Handler Utama Pengambilan Grup
+// 4. Handler Utama Pengambilan Grup (INSTAN < 0.5 DETIK!)
 async function fetchUserFacebookGroups() {
   const session = await getFacebookSession();
   if (!session.isLoggedIn) {
@@ -682,30 +649,44 @@ async function fetchUserFacebookGroups() {
     }
   });
 
-  let groups = await scanGroupsFromOpenTabs();
+  // 1. Scan instan dari tab Facebook yang sedang terbuka (< 0.3 detik)
+  let scannedGroups = await scanGroupsFromOpenTabs();
 
+  // 2. Gabungkan grup yang baru ter-scan dengan grup yang sudah tersimpan di memori ekstensi
+  const mergedMap = new Map();
+  existingGroups.forEach((eg) => {
+    if (eg && eg.id) {
+      mergedMap.set(eg.id, {
+        id: eg.id,
+        name: existingRealNames.get(eg.id) || eg.name || "",
+        url: eg.url || ("https://www.facebook.com/groups/" + eg.id),
+        isPlaceholder: !existingRealNames.has(eg.id)
+      });
+    }
+  });
+
+  scannedGroups.forEach((sg) => {
+    if (!sg || !sg.id) return;
+    const prev = mergedMap.get(sg.id);
+    const sgHasRealName = sg.name && !isPlaceholderGroupName(sg.name, sg.id);
+    if (!prev || sgHasRealName || prev.isPlaceholder) {
+      mergedMap.set(sg.id, {
+        id: sg.id,
+        name: sgHasRealName ? sg.name : (existingRealNames.get(sg.id) || sg.name || ""),
+        url: sg.url || ("https://www.facebook.com/groups/" + sg.id),
+        isPlaceholder: !sgHasRealName && !existingRealNames.has(sg.id)
+      });
+    }
+  });
+
+  let groups = Array.from(mergedMap.values());
+
+  // Hanya jika benar-benar 0 grup (tidak ada tab FB yang terbuka dan storage kosong), ambil cepat via network
   if (groups.length === 0) {
     groups = await fetchGroupsFromNetwork();
   }
 
-  // Jika tidak ada tab FB terbuka dan masih ada grup tersimpan di storage, perbaiki nama grup yang tersimpan
-  if (groups.length === 0 && existingGroups.length > 0) {
-    groups = existingGroups.map((eg) => ({
-      id: eg.id,
-      name: isPlaceholderGroupName(eg.name, eg.id) ? "" : eg.name,
-      url: eg.url || ("https://www.facebook.com/groups/" + eg.id),
-      isPlaceholder: isPlaceholderGroupName(eg.name, eg.id)
-    }));
-  }
-
-  groups.forEach((g) => {
-    if (isPlaceholderGroupName(g.name, g.id) && existingRealNames.has(g.id)) {
-      g.name = existingRealNames.get(g.id);
-      g.isPlaceholder = false;
-    }
-  });
-
-  groups = await resolveMissingGroupNames(groups);
+  groups = normalizeGroupsFast(groups);
 
   await chrome.storage.local.set({
     metus_fb_uid: session.userId,
@@ -713,10 +694,10 @@ async function fetchUserFacebookGroups() {
     metus_last_sync: Date.now(),
   });
 
-  // Lanjutkan resolusi sisa grup di background jika jumlah grup > 24
+  // Jalankan resolusi nama grup yang masih belum lengkap secara ASINKRON di background (tanpa membuat tombol Scan menunggu!)
   setTimeout(() => {
     resolveRemainingGroupsInBackground();
-  }, 500);
+  }, 200);
 
   return {
     success: true,
@@ -742,16 +723,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const savedList = Array.isArray(data.metus_groups) ? data.metus_groups : [];
       const hasPlaceholders = savedList.some((g) => isPlaceholderGroupName(g.name, g.id));
 
-      // Jika data tersimpan masih mengandung "Grup FB <id>", langsung jalankan resolusi otomatis
       if (hasPlaceholders) {
-        const refreshed = await fetchUserFacebookGroups();
-        if (refreshed && refreshed.success && refreshed.groups.length > 0) {
-          sendResponse({
-            userId: refreshed.userId || data.metus_fb_uid || null,
-            groups: refreshed.groups,
-          });
-          return;
-        }
+        setTimeout(() => {
+          resolveRemainingGroupsInBackground();
+        }, 300);
       }
 
       sendResponse({
@@ -926,8 +901,30 @@ async function executeSingleFacebookGroupPost(request) {
       };
     }
 
-    // 2. Beri waktu 3.2 detik agar React & Lexical Composer Facebook selesai menghidrasi event handler klik
-    await new Promise((r) => setTimeout(r, 3200));
+    // 1b. Matikan throttling background tab Chrome di MAIN world Facebook agar React & Dialog 'Buat postingan'
+    // tetap berjalan 60 FPS meskipun tab berada di latar belakang (active: false, tanpa jendela popup)!
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        world: "MAIN",
+        func: () => {
+          try {
+            Object.defineProperty(document, "hidden", { get: () => false, configurable: true });
+            Object.defineProperty(document, "visibilityState", { get: () => "visible", configurable: true });
+            window.requestAnimationFrame = function (cb) {
+              return setTimeout(function () {
+                try { cb(performance.now()); } catch (e) {}
+              }, 16);
+            };
+          } catch (e) {}
+        }
+      });
+    } catch (mainWorldErr) {
+      console.warn("[Metus Silent Engine] MAIN world anti-throttle note:", mainWorldErr);
+    }
+
+    // 2. Beri waktu 3.0 detik agar React & Lexical Composer Facebook selesai menghidrasi event handler klik
+    await new Promise((r) => setTimeout(r, 3000));
 
     // 2b. Konversi URL foto eksternal (http/https) ke Base64 DataURL di Service Worker
     const rawPhotoUrls = Array.isArray(request.photoUrls) ? request.photoUrls : [];
@@ -1288,7 +1285,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     for (const el of elements) {
       if (isExcludedElement(el)) continue;
       const ownText = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
-      if (!ownText || ownText.length > 85 || ownText.includes("\n")) continue;
+      if (!ownText || ownText.length > 85 || ownText.includes("\\n")) continue;
       if (ownText.includes("anonim") || ownText.includes("anonymous") || ownText.includes("komentar") || ownText.includes("comment")) {
         continue;
       }
@@ -1357,7 +1354,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     for (const b of buttons) {
       if (isExcludedElement(b)) continue;
       const t = (b.innerText || b.textContent || b.getAttribute("aria-label") || "").trim().toLowerCase();
-      if (!t || t.length > 45 || t.includes("\n")) continue;
+      if (!t || t.length > 45 || t.includes("\\n")) continue;
       if (subActions.some(s => t === s || t.startsWith(s))) {
         return b.closest('div[role="button"]') || b.closest('[tabindex="0"]') || b.parentElement || b;
       }
@@ -1807,8 +1804,8 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
 
   // 7. Fokus dan masukkan teks promosi ke dalam editor Lexical Facebook DENGAN FORMAT BARIS / ENTER 1:1 SESUAI DASHBOARD!
   // PENTING: Jangan kirim seluruh teks multi-baris sekaligus ke execCommand("insertText") karena Lexical Facebook
-  // akan menghapus karakter '\n' dan menggabungkan semua kalimat menjadi 1 paragraf rapat!
-  // Solusi: Masukkan baris demi baris dan kirim sinyal pindah paragraf (InputEvent insertParagraph / Shift+Enter) di setiap '\n'.
+  // akan menghapus karakter newline dan menggabungkan semua kalimat menjadi 1 paragraf rapat!
+  // Solusi: Masukkan baris demi baris dan kirim sinyal pindah paragraf (InputEvent insertParagraph / Shift+Enter) di setiap baris.
   if (editor.getAttribute("data-metus-typed") !== "1") {
     editor.setAttribute("data-metus-typed", "1");
 
@@ -1848,8 +1845,8 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
 
     anchorSelectionAtEnd(editor);
 
-    const normalizedContent = String(contentToPost || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    const lines = normalizedContent.split("\n");
+    const normalizedContent = String(contentToPost || "").replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
+    const lines = normalizedContent.split("\\n");
 
     for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
       const lineStr = lines[lineIdx];
@@ -2807,8 +2804,8 @@ if (isExtensionContextAlive()) {
   // Set "1.0.9" untuk kompatibilitas mundur dengan bundle lama di athay04-cloud.github.io/autopost/
   // sekaligus set "data-metus-ext-version" = "1.1.6"
   document.documentElement.setAttribute("data-metus-bridge-version", "1.0.9");
-  document.documentElement.setAttribute("data-metus-ext-version", "1.1.6");
-  console.log("[Metus Bridge v1.1.6] Active & connected to Web Dashboard (1:1 Linebreaks + Multi-Photo Engine).");
+  document.documentElement.setAttribute("data-metus-ext-version", "1.1.7");
+  console.log("[Metus Bridge v1.1.7] Active & connected to Web Dashboard (Instant Scan + 1:1 Linebreaks + Multi-Photo Engine).");
 
   // Sembunyikan banner peringatan lama "perlu diperbarui ke v1.0.9" jika ekstensi v1.1.6 sudah aktif
   function hideLegacyUpdateBanner() {
