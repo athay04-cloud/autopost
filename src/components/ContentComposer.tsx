@@ -439,8 +439,8 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                 !(document.documentElement.getAttribute('data-metus-bridge-version') || '').startsWith('1.') && (
                   <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                      <strong>Penting agar Foto Ikut Ter-posting:</strong> Ekstensi Chrome Anda perlu diperbarui ke{' '}
-                      <span className="font-mono font-bold">v1.0.9</span> (Engine Upload Foto Anti-CSP) lalu di-reload di{' '}
+                      <strong>Penting agar Format Baris & Multi-Foto Presisi:</strong> Pastikan Ekstensi Chrome Anda menggunakan{' '}
+                      <span className="font-mono font-bold">v1.1.6</span> (Engine Paragraf/Enter 1:1 & Multi-Foto) lalu di-reload di{' '}
                       <span className="font-mono">chrome://extensions</span>.
                     </div>
                     <button
@@ -449,7 +449,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                       className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      <span>Unduh Ekstensi v1.0.9</span>
+                      <span>Unduh Ekstensi v1.1.6</span>
                     </button>
                   </div>
                 )}
