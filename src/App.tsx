@@ -541,7 +541,13 @@ export default function App() {
   };
 
   const handleUpdateScenario = (updated: PostScenario) => {
-    setScenarios(scenarios.map((s) => (s.id === updated.id ? updated : s)));
+    setScenarios((prev) =>
+      prev.map((s) =>
+        s.id === updated.id
+          ? updated
+          : { ...s, isAnonymous: updated.isAnonymous }
+      )
+    );
   };
 
   // Import / Export Handlers
@@ -801,10 +807,10 @@ export default function App() {
                   document.documentElement.getAttribute('data-metus-ext-version') || bridgeVer;
                 const isModernBridge =
                   bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
-                if (isAnonymous && extVer !== '1.1.3' && extVer !== '1.1.2') {
+                if (isAnonymous && !['1.1.4', '1.1.3', '1.1.2'].includes(extVer)) {
                   addLog(
                     'warn',
-                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${extVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.3 agar tombol Postingan Anonim Facebook diklik otomatis!`
+                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${extVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.4 agar tombol Postingan Anonim Facebook diklik otomatis!`
                   );
                 }
                 window.postMessage(

@@ -234,7 +234,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/20 text-white">
                       Manifest V3 Ready
                     </span>
-                    <span className="text-xs opacity-90 font-medium">Versi 1.1.3 (Anti-Timeout 120s + Fix Anonymous Post + Real Group Names)</span>
+                    <span className="text-xs opacity-90 font-medium">Versi 1.1.4 (Auto Turn-Off Sticky Anonymous + Anti-Timeout 120s)</span>
                   </div>
                   <h3 className="text-lg font-bold">
                     metus-auto-post-chrome-extension.zip
@@ -263,7 +263,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                   ) : (
                     <>
                       <Download className="w-4 h-4 text-blue-600" />
-                      <span>Download ZIP v1.1.3 (Terbaru)</span>
+                      <span>Download ZIP v1.1.4 (Terbaru)</span>
                     </>
                   )}
                 </button>
@@ -274,15 +274,15 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                 <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs space-y-1">
                   <div className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
-                    <span>⚡ Pembaruan v1.1.3: Fix Error Timeout 120 Detik + Fix Postingan Anonim di GitHub Pages</span>
-                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">v1.1.3 Fix</span>
+                    <span>⚡ Pembaruan v1.1.4: Auto-Matikan Sakelar Anonim Saat Tidak Dicentang + Anti-Timeout 120s</span>
+                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">v1.1.4 Fix</span>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
-                    <strong>1. Fix Error &quot;Timeout: Ekstensi membutuhkan waktu lebih dari 120 detik&quot;:</strong> Menghapus kunci blokir 45 detik pada grup yang sama, menambahkan <em>Orphaned Content Script Guard</em> + <em>Auto-Reinject Bridge</em> saat ekstensi di-reload, serta <em>MV3 Service Worker Keep-Alive Heartbeat</em>.
+                    <strong>1. Fix Sakelar Anonim &quot;Menyangkut&quot; Saat Tidak Dicentang:</strong> Facebook menyimpan status sakelar <em>Posting secara anonim</em> tetap ON setelah Anda pernah memposting secara anonim. Kini saat <em>Anonymous Mode</em> <strong>tidak dicentang</strong>, ekstensi otomatis mematikan sakelar anonim di Facebook agar postingan kembali menggunakan nama akun asli Anda.
                     <br />
-                    <strong>2. Fix Anonymous Mode Langsung di <code>athay04-cloud.github.io/autopost/</code>:</strong> <code>dashboard_bridge.js</code> kini membaca langsung status centang kotak <em>Anonymous Mode</em> dari halaman web Anda dan mengklik sakelar <code>Posting secara anonim</code> tepat 1x (anti double-toggle).
+                    <strong>2. Fix Klik Pill &quot;Tulis sesuatu...&quot;:</strong> Mencegah pemilihan tombol <em>Postingan anonim</em> di kartu grup saat mode normal aktif.
                     <br />
-                    <strong>PENTING:</strong> Unduh <strong>ZIP v1.1.3</strong> di atas, pasang di <code>chrome://extensions</code>, lalu <strong>Refresh (F5)</strong> tab dashboard Anda sebelum menekan tombol Jalankan.
+                    <strong>PENTING:</strong> Unduh <strong>ZIP v1.1.4</strong> di atas, pasang di <code>chrome://extensions</code>, lalu <strong>Refresh (F5)</strong> tab dashboard Anda.
                   </div>
                 </div>
               </div>

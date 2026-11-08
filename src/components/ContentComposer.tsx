@@ -436,7 +436,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                 ))}
               </div>
               {typeof document !== 'undefined' &&
-                document.documentElement.getAttribute('data-metus-bridge-version') !== '1.0.9' && (
+                !(document.documentElement.getAttribute('data-metus-bridge-version') || '').startsWith('1.') && (
                   <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
                       <strong>Penting agar Foto Ikut Ter-posting:</strong> Ekstensi Chrome Anda perlu diperbarui ke{' '}

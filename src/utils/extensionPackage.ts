@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.1.3',
-        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.1.3 (Anti-Timeout 120s, Auto-Reinject Bridge, Fix Postingan Anonim & Nama Grup Asli).',
+        version: '1.1.4',
+        description: 'Ekstensi otomasi posting Facebook Group Mode Stealth v1.1.4 (Auto Turn-Off Sticky Anonymous Switch saat Unchecked, Anti-Timeout 120s & Nama Grup Asli).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -1221,25 +1221,39 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       "start discussion"
     ];
 
-    // Prioritaskan elemen dengan teks atau label tepat
-    const elements = Array.from(searchScope.querySelectorAll('div[role="button"], div[tabindex="0"], span, p, div'));
+    // Prioritaskan elemen tombol dengan teks "Tulis sesuatu..." (dan JANGAN PERNAH memilih tombol Postingan Anonim!)
+    const elements = Array.from(searchScope.querySelectorAll('div[role="button"], div[tabindex="0"], span'));
     for (const el of elements) {
       if (isExcludedElement(el)) continue;
-      const t = (el.innerText || el.getAttribute("aria-label") || "").trim().toLowerCase();
+      const btn = el.closest('div[role="button"]') || el.closest('[tabindex="0"]');
+      if (!btn) continue;
+      const t = (btn.innerText || btn.getAttribute("aria-label") || el.innerText || "").trim().toLowerCase();
+      if (t.includes("anonim") || t.includes("anonymous") || t.includes("komentar") || t.includes("comment")) {
+        continue;
+      }
       if (targetPhrases.some((p) => t === p || t.startsWith(p) || t.includes(p))) {
-        if (!t.includes("komentar") && !t.includes("comment")) {
-          return el.closest('div[role="button"]') || el.closest('[tabindex="0"]') || el;
-        }
+        return btn;
       }
     }
 
-    // Jika card ada, cari pill abu-abu besar di dalamnya (lebar > 150px)
+    // Jika card ada, cari pill abu-abu besar di dalamnya (dan kecualikan tombol Postingan Anonim / Foto / Perasaan)
     if (card) {
       const cardButtons = Array.from(card.querySelectorAll('div[role="button"], div[tabindex="0"]'));
       for (const b of cardButtons) {
         if (isExcludedElement(b)) continue;
-        const t = (b.innerText || b.getAttribute("aria-label") || "").toLowerCase();
-        if (t.includes("foto") || t.includes("perasaan") || t.includes("singgah") || t.includes("video")) continue;
+        const t = (b.innerText || b.textContent || b.getAttribute("aria-label") || "").toLowerCase();
+        if (
+          t.includes("anonim") ||
+          t.includes("anonymous") ||
+          t.includes("foto") ||
+          t.includes("perasaan") ||
+          t.includes("singgah") ||
+          t.includes("video") ||
+          t.includes("polling") ||
+          t.includes("acara")
+        ) {
+          continue;
+        }
         const rect = b.getBoundingClientRect();
         if (rect.width > 120 && rect.height >= 26) {
           return b;
@@ -1425,6 +1439,73 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     return clickedAnonControl || isDialogCurrentlyAnonymous(document.querySelector('div[role="dialog"]') || currentDlg);
   }
 
+  // 4f. MATIKAN sakelar "Posting secara anonim" jika pengguna TIDAK mencentang Anonymous Mode
+  // (Penting: Facebook menyimpan status sakelar Anonim ON dari postingan sebelumnya di grup tersebut!)
+  async function disableAnonymousSwitchInDialog(dlg) {
+    let currentDlg = document.querySelector('div[role="dialog"]') || document.querySelector('div[aria-modal="true"]') || dlg;
+    if (!currentDlg) return false;
+
+    let turnedOff = false;
+
+    // 1. Cari sakelar (switch/checkbox) yang sedang dalam posisi ON (aria-checked="true" atau checked=true) lalu klik 1x untuk mematikan!
+    const switches = Array.from(currentDlg.querySelectorAll('input[role="switch"], div[role="switch"], [role="switch"], input[type="checkbox"], [role="checkbox"]'));
+    for (const sw of switches) {
+      const isChecked = sw.getAttribute("aria-checked") === "true" || (sw.tagName === "INPUT" && sw.checked === true);
+      if (isChecked) {
+        console.log("[Metus Normal Mode] Mematikan sakelar Posting Secara Anonim yang masih menyala dari sesi sebelumnya:", sw);
+        turnedOff = true;
+        try {
+          sw.click();
+        } catch (e) {}
+
+        for (let w = 0; w < 5; w++) {
+          await sleep(400);
+          currentDlg = document.querySelector('div[role="dialog"]') || currentDlg;
+          const stillChecked = sw.getAttribute("aria-checked") === "true" || (sw.tagName === "INPUT" && sw.checked === true);
+          if (!stillChecked && !isDialogCurrentlyAnonymous(currentDlg)) {
+            return true;
+          }
+        }
+
+        // Fallback: jika masih menyala setelah 2 detik, klik wrapper induknya 1x
+        if (sw.getAttribute("aria-checked") === "true" || (sw.tagName === "INPUT" && sw.checked === true)) {
+          const wrapper = sw.closest('div[role="switch"], label, div[role="button"], [tabindex="0"]') || sw.parentElement;
+          if (wrapper && wrapper !== sw) {
+            triggerRealisticClick(wrapper);
+            await sleep(900);
+          }
+        }
+        return true;
+      }
+    }
+
+    // 2. Jika header dialog masih bertuliskan "Anggota Anonim" / "Peserta Anonim" tetapi switch tidak terdeteksi lewat role="switch",
+    // cari baris teks "Posting secara anonim" / "Postingan anonim" lalu klik 1x untuk mematikannya
+    if (isDialogCurrentlyAnonymous(currentDlg)) {
+      const anonToggleLabels = [
+        "posting secara anonim",
+        "postingan anonim",
+        "kirim secara anonim",
+        "post anonymously",
+        "anonymous post"
+      ];
+      const spans = Array.from(currentDlg.querySelectorAll('span, div, label'));
+      for (const sp of spans) {
+        const t = (sp.innerText || sp.textContent || "").trim().toLowerCase();
+        if (anonToggleLabels.includes(t)) {
+          const directBtn = sp.closest('div[role="switch"], label, div[role="button"], [tabindex="0"]') || sp.parentElement || sp;
+          console.log("[Metus Normal Mode] Mematikan baris label anonim:", directBtn);
+          turnedOff = true;
+          triggerRealisticClick(directBtn);
+          await sleep(900);
+          return true;
+        }
+      }
+    }
+
+    return turnedOff;
+  }
+
   // 5. Temukan dan klik kartu komposer
   dismissGroupRulesModals();
   let composerCard = null;
@@ -1439,10 +1520,10 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     }
     if (composerCard) {
       composerPill = findComposerPill(composerCard);
-      if (composerPill || anonCardBtn) break;
+      if (composerPill || (isAnonymous && anonCardBtn)) break;
     } else {
       composerPill = findComposerPill(null);
-      if (composerPill || anonCardBtn) break;
+      if (composerPill || (isAnonymous && anonCardBtn)) break;
     }
     window.scrollBy({ top: 120, behavior: "smooth" });
     await sleep(600);
@@ -1544,9 +1625,9 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
 
   console.log("[Metus] Editor postingan grup ditemukan:", editor);
 
-  // 6b. AKTIFKAN MODE ANONIM DI DALAM DIALOG SEBELUM MENGETIK TEKS & MENGUNGGAH FOTO
+  // 6b. SINKRONISASI SAKELAR ANONIM SESUAI PILIHAN PENGGUNA (ON JIKA DICENTANG, OFF JIKA TIDAK DICENTANG!)
   if (isAnonymous) {
-    console.log("[Metus Anonymous] Memastikan sakelar Postingan Anonim aktif di dalam dialog...");
+    console.log("[Metus Anonymous] Memastikan sakelar Postingan Anonim AKTIF di dalam dialog...");
     const anonReady = await enableAnonymousSwitchInDialog(activeContainer);
 
     if (!anonReady && !anonCardBtn) {
@@ -1556,7 +1637,6 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       };
     }
 
-    // Tunggu transisi DOM modal "Anggota Anonim" selesai dan ambil ulang referensi editor terbaru
     await sleep(900);
     const refreshedDialogs = Array.from(document.querySelectorAll('div[role="dialog"], div[aria-modal="true"]'));
     for (const rDlg of refreshedDialogs) {
@@ -1571,6 +1651,27 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       }
     }
     console.log("[Metus Anonymous] Mode Anggota Anonim aktif! Editor siap diisi.");
+  } else {
+    // Jika pengguna TIDAK mencentang Anonymous Mode, pastikan sakelar Anonim Facebook DIMATIKAN
+    // (karena Facebook sering mengingat status Anonim ON dari postingan sebelumnya!)
+    if (isDialogCurrentlyAnonymous(activeContainer)) {
+      console.log("[Metus Normal Mode] Terdeteksi sakelar Anonim masih aktif dari sesi sebelumnya. Mematikan sakelar Anonim...");
+      await disableAnonymousSwitchInDialog(activeContainer);
+      await sleep(900);
+      const refreshedDialogs = Array.from(document.querySelectorAll('div[role="dialog"], div[aria-modal="true"]'));
+      for (const rDlg of refreshedDialogs) {
+        const rEd =
+          rDlg.querySelector('div[role="textbox"][contenteditable="true"]') ||
+          rDlg.querySelector('div[data-lexical-editor="true"]') ||
+          rDlg.querySelector('div[contenteditable="true"]');
+        if (rEd) {
+          editor = rEd;
+          activeContainer = rDlg;
+          break;
+        }
+      }
+      console.log("[Metus Normal Mode] Sakelar Anonim berhasil dimatikan! Memposting dengan nama akun asli.");
+    }
   }
 
   // 7. Fokus dan masukkan teks promosi ke dalam editor Facebook (MURNI 1X, ANTI "halohalohalo")
@@ -2497,20 +2598,16 @@ if (isExtensionContextAlive()) {
   window.__metus_dashboard_bridge_loaded = true;
   document.documentElement.setAttribute("data-metus-bridge-active", "1");
   // Set "1.0.9" untuk kompatibilitas mundur dengan bundle lama di athay04-cloud.github.io/autopost/
-  // sekaligus set "data-metus-ext-version" = "1.1.3"
+  // sekaligus set "data-metus-ext-version" = "1.1.4"
   document.documentElement.setAttribute("data-metus-bridge-version", "1.0.9");
-  document.documentElement.setAttribute("data-metus-ext-version", "1.1.3");
-  console.log("[Metus Bridge v1.1.3] Active & connected to Web Dashboard.");
+  document.documentElement.setAttribute("data-metus-ext-version", "1.1.4");
+  console.log("[Metus Bridge v1.1.4] Active & connected to Web Dashboard.");
 
   let lastBridgePostTime = 0;
   let pendingSyncTimer = null;
 
-  // Deteksi apakah kotak centang "Anonymous Mode" sedang dicentang di DOM halaman dashboard
-  // (Memastikan fitur Anonymous Mode tetap bekerja 100% di https://athay04-cloud.github.io/autopost/ meskipun bundle lama belum mengirim event.data.isAnonymous)
+  // Prioritaskan pembacaan langsung kotak centang "Anonymous Mode" yang sedang tampil di layar pengguna!
   function detectAnonymousModeFromDom(eventData) {
-    if (eventData && typeof eventData.isAnonymous === "boolean") {
-      return eventData.isAnonymous;
-    }
     try {
       const labels = Array.from(document.querySelectorAll("label"));
       for (const lbl of labels) {
@@ -2521,6 +2618,9 @@ if (isExtensionContextAlive()) {
         }
       }
     } catch (e) {}
+    if (eventData && typeof eventData.isAnonymous === "boolean") {
+      return eventData.isAnonymous;
+    }
     return false;
   }
 
