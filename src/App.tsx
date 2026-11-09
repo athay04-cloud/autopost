@@ -807,10 +807,10 @@ export default function App() {
                   document.documentElement.getAttribute('data-metus-ext-version') || bridgeVer;
                 const isModernBridge =
                   bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
-                if (isAnonymous && !['1.1.7', '1.1.6', '1.1.5', '1.1.4', '1.1.3', '1.1.2'].includes(extVer)) {
+                if (isAnonymous && !['1.1.8', '1.1.7', '1.1.6', '1.1.5', '1.1.4', '1.1.3', '1.1.2'].includes(extVer)) {
                   addLog(
                     'warn',
-                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${extVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.7 agar tombol Postingan Anonim Facebook diklik otomatis!`
+                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${extVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.8 agar tombol Postingan Anonim Facebook diklik otomatis!`
                   );
                 }
                 window.postMessage(

@@ -234,7 +234,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/20 text-white">
                       Manifest V3 Ready
                     </span>
-                    <span className="text-xs opacity-90 font-medium">Versi 1.1.7 (Instant Scan &lt;0.5s + Paragraf 1:1 + Multi-Foto + Silent Tab)</span>
+                    <span className="text-xs opacity-90 font-medium">Versi 1.1.8 (Anti-Perasaan/Aktivitas + Paragraf 1:1 + Multi-Foto + Silent Tab)</span>
                   </div>
                   <h3 className="text-lg font-bold">
                     metus-auto-post-chrome-extension.zip
