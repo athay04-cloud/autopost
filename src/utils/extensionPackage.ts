@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.1.8',
-        description: 'Ekstensi otomasi posting Facebook Group v1.1.8 (Strict Anti-Perasaan/Aktivitas, Direct Tulis Sesuatu Finder, Paragraf 1:1 & Multi-Foto).',
+        version: '1.2.0',
+        description: 'Ekstensi otomasi posting Facebook Group v1.2.0 (Anti-Throttle Service Worker Timer, Auto-Comment, Queue Abort, Grup Jual Beli & Diskusi Support, Paragraf 1:1 & Multi-Foto).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -744,15 +744,87 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "METUS_BG_SLEEP") {
+    const delayMs = Math.min(Math.max(Number(request.ms) || 100, 10), 10000);
+    setTimeout(() => {
+      try {
+        sendResponse({ ok: true });
+      } catch (e) {}
+    }, delayMs);
+    return true;
+  }
+
+  if (request.action === "METUS_WAKE_TAB") {
+    const targetTabId = sender && sender.tab && sender.tab.id ? sender.tab.id : null;
+    if (!targetTabId) {
+      sendResponse({ ok: false });
+      return true;
+    }
+    (async () => {
+      try {
+        const targetTab = await chrome.tabs.get(targetTabId);
+        if (targetTab && targetTab.windowId) {
+          const activeTabs = await chrome.tabs.query({ windowId: targetTab.windowId, active: true });
+          const prevActiveTab = activeTabs && activeTabs.length > 0 ? activeTabs[0] : null;
+          await chrome.tabs.update(targetTabId, { active: true });
+          await new Promise((r) => setTimeout(r, 90));
+          if (prevActiveTab && prevActiveTab.id && prevActiveTab.id !== targetTabId) {
+            await chrome.tabs.update(prevActiveTab.id, { active: true });
+          }
+        }
+      } catch (e) {}
+      try {
+        sendResponse({ ok: true });
+      } catch (e) {}
+    })();
+    return true;
+  }
+
   if (request.action === "EXECUTE_POST") {
     // Masukkan ke antrean posting agar dieksekusi 1 per 1 secara stabil tanpa tab jumping
-    enqueuePostTask(request, sendResponse);
+    const senderTabId = sender && sender.tab && sender.tab.id ? sender.tab.id : null;
+    enqueuePostTask(request, sendResponse, senderTabId);
+    return true;
+  }
+
+  if (request.action === "ABORT_POST_QUEUE") {
+    const abortedCount = postQueue.length;
+    while (postQueue.length > 0) {
+      const pendingItem = postQueue.shift();
+      if (pendingItem) {
+        notifyDashboardPostResult(pendingItem, {
+          success: false,
+          postUrl: "https://www.facebook.com/groups/" + (pendingItem.request?.groupId || ""),
+          error: "Dihentikan oleh pengguna (Stop Posting)."
+        });
+      }
+    }
+    if (activeAutomationTabId) {
+      const tabToClose = activeAutomationTabId;
+      activeAutomationTabId = null;
+      try {
+        chrome.tabs.remove(tabToClose, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (e) {}
+    }
+    if (activeAutomationWindowId) {
+      const winToClose = activeAutomationWindowId;
+      activeAutomationWindowId = null;
+      try {
+        chrome.windows.remove(winToClose, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (e) {}
+    }
+    sendResponse({ ok: true, abortedCount });
     return true;
   }
 });
 
-// Auto-Reinject dashboard_bridge.js ke semua tab dashboard yang sedang terbuka saat ekstensi di-install / di-reload
-// Ini mencegah error "Timeout 120 detik" akibat tab dashboard belum di-refresh (F5) setelah pasang ulang ekstensi!
+// Auto-Reinject dashboard_bridge.js HANYA saat ekstensi baru di-install / di-reload di chrome://extensions
+// PENTING: JANGAN panggil reinjectDashboardBridgeToOpenTabs() di top-level Service Worker karena setiap kali
+// Service Worker bangun dari idle 30 detik, pemanggilan top-level akan menyuntikkan bridge ganda!
 async function reinjectDashboardBridgeToOpenTabs() {
   try {
     const tabs = await chrome.tabs.query({
@@ -781,20 +853,20 @@ async function reinjectDashboardBridgeToOpenTabs() {
 chrome.runtime.onInstalled.addListener(() => {
   reinjectDashboardBridgeToOpenTabs();
 });
-reinjectDashboardBridgeToOpenTabs();
 
 // Antrean eksekusi postingan: Memastikan hanya 1 tab Facebook yang aktif pada satu waktu & mencegah duplikasi klik ganda (<3 detik)
 const postQueue = [];
 let isQueueBusy = false;
+let activeAutomationTabId = null;
+let activeAutomationWindowId = null;
 const recentPostLocks = new Map();
 
-function enqueuePostTask(request, sendResponse) {
+function enqueuePostTask(request, sendResponse, senderTabId) {
   const now = Date.now();
   const resultLockKey = "RES::" + (request.resultId || "");
   const prevResultTime = request.resultId ? recentPostLocks.get(resultLockKey) : 0;
 
   // Hanya cegah duplikasi jika resultId yang PERSIS SAMA dikirim dua kali dalam < 3 detik
-  // (Jangan kunci groupId selama 60 detik agar pengguna bisa langsung retry grup yang sama!)
   if (prevResultTime && now - prevResultTime < 3000) {
     console.warn("[Metus Background] Mencegah duplikasi event instan:", resultLockKey);
     sendResponse({
@@ -805,10 +877,39 @@ function enqueuePostTask(request, sendResponse) {
     return;
   }
 
-  if (request.resultId) recentPostLocks.set(resultLockKey, now);
+  if (request.resultId) {
+    recentPostLocks.set(resultLockKey, now);
+    setTimeout(() => {
+      recentPostLocks.delete(resultLockKey);
+    }, 60000);
+  }
 
-  postQueue.push({ request, sendResponse });
+  postQueue.push({ request, sendResponse, senderTabId });
   processNextPostQueue();
+}
+
+async function notifyDashboardPostResult(item, res) {
+  try {
+    item.sendResponse(res);
+  } catch (e) {}
+
+  const payload = {
+    action: "DIRECT_POST_RESULT",
+    resultId: item.request.resultId,
+    groupId: item.request.groupId,
+    success: !!(res && res.success),
+    error: res ? res.error : undefined,
+    message: res ? res.message : undefined,
+    postUrl: (res && res.postUrl) || ("https://www.facebook.com/groups/" + item.request.groupId)
+  };
+
+  if (item.senderTabId) {
+    try {
+      chrome.tabs.sendMessage(item.senderTabId, payload, () => {
+        void chrome.runtime.lastError;
+      });
+    } catch (e) {}
+  }
 }
 
 async function processNextPostQueue() {
@@ -818,31 +919,29 @@ async function processNextPostQueue() {
 
   try {
     const res = await executeSingleFacebookGroupPost(item.request);
-    item.sendResponse(res);
+    await notifyDashboardPostResult(item, res);
   } catch (err) {
     console.error("[Metus Background] Post runner error:", err);
-    item.sendResponse({
+    await notifyDashboardPostResult(item, {
       success: false,
       postUrl: "https://www.facebook.com/groups/" + item.request.groupId,
       error: "Kesalahan eksekusi: " + (err.message || String(err))
     });
   } finally {
     isQueueBusy = false;
-    // Jeda sejenak sebelum memproses grup antrean berikutnya
-    setTimeout(processNextPostQueue, 1200);
+    setTimeout(processNextPostQueue, 800);
   }
 }
 
 // Menjalankan postingan dalam MODE SILENT BACKGROUND TAB (TANPA JENDELA POPUP DI LAYAR)
-// Dilengkapi MV3 Service Worker Keep-Alive Heartbeat agar tidak pernah mati/timeout di tengah jalan!
+// Dilengkapi MV3 Service Worker Keep-Alive Heartbeat & Anti-Throttle Timer
 async function executeSingleFacebookGroupPost(request) {
   const groupUrl = "https://www.facebook.com/groups/" + request.groupId + "/?sorting_setting=CHRONOLOGICAL";
-  console.log("[Metus Silent Engine v1.1.5] Membuka silent background tab (active: false) untuk:", groupUrl, "isAnonymous:", !!request.isAnonymous);
+  console.log("[Metus Silent Engine v1.2.0] Membuka silent background tab untuk:", groupUrl, "isAnonymous:", !!request.isAnonymous);
 
   let win = null;
   let tabId = null;
 
-  // MV3 Service Worker Keep-Alive Heartbeat (mencegah Chrome menghentikan Service Worker setelah 30 detik)
   const keepAliveTimer = setInterval(() => {
     try {
       chrome.runtime.getPlatformInfo(() => {});
@@ -850,8 +949,6 @@ async function executeSingleFacebookGroupPost(request) {
   }, 4000);
 
   try {
-    // Prioritas 1: Buat tab di latar belakang (active: false, pinned: true) di jendela Chrome yang ada
-    // sehingga TIDAK ADA jendela popup baru yang muncul di layar pengguna!
     try {
       const bgTab = await chrome.tabs.create({
         url: groupUrl,
@@ -862,7 +959,6 @@ async function executeSingleFacebookGroupPost(request) {
         tabId = bgTab.id;
       }
     } catch (tabErr) {
-      console.warn("[Metus Silent Engine] Fallback tab tanpa pinned:", tabErr);
       try {
         const bgTab2 = await chrome.tabs.create({
           url: groupUrl,
@@ -872,7 +968,6 @@ async function executeSingleFacebookGroupPost(request) {
           tabId = bgTab2.id;
         }
       } catch (tabErr2) {
-        // Fallback terakhir hanya jika tidak ada jendela Chrome sama sekali yang terbuka
         win = await chrome.windows.create({
           url: groupUrl,
           focused: false,
@@ -887,44 +982,40 @@ async function executeSingleFacebookGroupPost(request) {
       }
     }
 
+    activeAutomationTabId = tabId;
+    activeAutomationWindowId = win && win.id ? win.id : null;
+
     if (!tabId) {
       throw new Error("Gagal membuat tab latar belakang untuk grup Facebook.");
     }
 
-    // 1. Tunggu hingga DOM & Komposer Grup Facebook benar-benar siap di background tab (maks 24 detik)
-    const isLoaded = await waitForFacebookTabReady(tabId, 24000);
-    if (!isLoaded) {
-      return {
-        success: false,
-        postUrl: groupUrl,
-        error: "Gagal memuat halaman grup Facebook (timeout 24s). Pastikan koneksi internet stabil dan Anda sudah login ke Facebook di Chrome."
-      };
-    }
+    // 1. Tunggu hingga DOM & Komposer Grup Facebook siap (maks 14 detik dengan hard timeout eksternal)
+    await waitForFacebookTabReady(tabId, 14000);
 
-    // 1b. Matikan throttling background tab Chrome di MAIN world Facebook agar React & Dialog 'Buat postingan'
-    // tetap berjalan 60 FPS meskipun tab berada di latar belakang (active: false, tanpa jendela popup)!
+    // 1b. Matikan throttling background tab Chrome di MAIN world Facebook (dengan proteksi timeout 2 detik agar tidak pernah hang)
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tabId },
-        world: "MAIN",
-        func: () => {
-          try {
-            Object.defineProperty(document, "hidden", { get: () => false, configurable: true });
-            Object.defineProperty(document, "visibilityState", { get: () => "visible", configurable: true });
-            window.requestAnimationFrame = function (cb) {
-              return setTimeout(function () {
-                try { cb(performance.now()); } catch (e) {}
-              }, 16);
-            };
-          } catch (e) {}
-        }
-      });
-    } catch (mainWorldErr) {
-      console.warn("[Metus Silent Engine] MAIN world anti-throttle note:", mainWorldErr);
-    }
+      await Promise.race([
+        chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          world: "MAIN",
+          func: () => {
+            try {
+              Object.defineProperty(document, "hidden", { get: () => false, configurable: true });
+              Object.defineProperty(document, "visibilityState", { get: () => "visible", configurable: true });
+              window.requestAnimationFrame = function (cb) {
+                return setTimeout(function () {
+                  try { cb(performance.now()); } catch (e) {}
+                }, 16);
+              };
+            } catch (e) {}
+          }
+        }),
+        new Promise((r) => setTimeout(r, 2000))
+      ]);
+    } catch (mainWorldErr) {}
 
-    // 2. Beri waktu 3.0 detik agar React & Lexical Composer Facebook selesai menghidrasi event handler klik
-    await new Promise((r) => setTimeout(r, 3000));
+    // 2. Beri waktu 1.8 detik agar React & Lexical Composer Facebook menghidrasi event handler klik
+    await new Promise((r) => setTimeout(r, 1800));
 
     // 2b. Konversi URL foto eksternal (http/https) ke Base64 DataURL di Service Worker
     const rawPhotoUrls = Array.isArray(request.photoUrls) ? request.photoUrls : [];
@@ -951,7 +1042,7 @@ async function executeSingleFacebookGroupPost(request) {
       }
     }
 
-    // 3. Jalankan otomasi DOM posting langsung di dalam konteks tab Facebook dengan batas waktu pengaman 75 detik
+    // 3. Jalankan otomasi DOM posting langsung di dalam konteks tab Facebook dengan batas waktu pengaman 55 detik
     const scriptPromise = chrome.scripting.executeScript({
       target: { tabId: tabId },
       func: executeFacebookPostAutomation,
@@ -965,11 +1056,11 @@ async function executeSingleFacebookGroupPost(request) {
             {
               result: {
                 success: false,
-                error: "Waktu eksekusi form komposer habis (75 detik). Pastikan grup mengizinkan postingan dari akun Anda."
+                error: "Waktu eksekusi form komposer habis (55 detik). Pastikan grup mengizinkan postingan dari akun Anda."
               }
             }
           ]),
-        75000
+        55000
       )
     );
 
@@ -995,58 +1086,77 @@ async function executeSingleFacebookGroupPost(request) {
     };
   } finally {
     clearInterval(keepAliveTimer);
+    if (activeAutomationTabId === tabId) activeAutomationTabId = null;
+    if (win && activeAutomationWindowId === win.id) activeAutomationWindowId = null;
     if (tabId) {
       setTimeout(() => {
         try { chrome.tabs.remove(tabId); } catch (e) {}
-      }, 2000);
+      }, 1500);
     }
     if (win && win.id) {
       setTimeout(() => {
         try { chrome.windows.remove(win.id); } catch (e) {}
-      }, 2200);
+      }, 1800);
     }
   }
 }
 
-// Helper: Memastikan tab Facebook selesai memuat komponen komposer grup (bukan sekadar navbar atas)
-function waitForFacebookTabReady(tabId, maxWaitMs = 24000) {
+// Helper: Memastikan tab Facebook selesai memuat komponen komposer grup (dengan hard timeout eksternal agar tidak pernah hang > maxWaitMs)
+function waitForFacebookTabReady(tabId, maxWaitMs = 14000) {
   return new Promise((resolve) => {
-    const startTime = Date.now();
-    const interval = setInterval(async () => {
+    let resolved = false;
+    let isChecking = false;
+    let interval = null;
+
+    const finish = (val) => {
+      if (resolved) return;
+      resolved = true;
+      if (interval) clearInterval(interval);
+      clearTimeout(hardTimer);
+      resolve(val);
+    };
+
+    const hardTimer = setTimeout(() => {
+      finish(true);
+    }, maxWaitMs);
+
+    interval = setInterval(async () => {
+      if (resolved || isChecking) return;
+      isChecking = true;
       try {
         const tab = await chrome.tabs.get(tabId);
-        if (tab && tab.url && tab.url.includes("facebook.com")) {
-          const checkReady = await chrome.scripting.executeScript({
-            target: { tabId },
-            func: () => {
-              const rs = document.readyState;
-              const hasComposerPagelet = !!document.querySelector(
-                'div[data-pagelet="GroupInlineComposer"], div[data-pagelet*="InlineComposer"], div[role="feed"]'
-              );
-              const bodyTxt = (document.body ? (document.body.innerText || document.body.textContent || "") : "").toLowerCase();
-              const hasComposerPhrase =
-                bodyTxt.includes("tulis sesuatu") ||
-                bodyTxt.includes("write something") ||
-                bodyTxt.includes("buat postingan") ||
-                bodyTxt.includes("create a public post") ||
-                bodyTxt.includes("mulai diskusi") ||
-                bodyTxt.includes("jual sesuatu") ||
-                bodyTxt.includes("apa yang anda jual");
-              return hasComposerPhrase || (rs === "complete" && hasComposerPagelet);
-            },
-          });
+        if (tab && tab.url && tab.url.includes("facebook.com") && tab.status === "complete") {
+          const checkReady = await Promise.race([
+            chrome.scripting.executeScript({
+              target: { tabId },
+              func: () => {
+                const hasComposerPagelet = !!document.querySelector(
+                  'div[data-pagelet="GroupInlineComposer"], div[data-pagelet*="InlineComposer"], div[role="feed"], div[role="main"]'
+                );
+                const bodyTxt = (document.body ? (document.body.innerText || document.body.textContent || "") : "").toLowerCase();
+                const hasComposerPhrase =
+                  bodyTxt.includes("tulis sesuatu") ||
+                  bodyTxt.includes("write something") ||
+                  bodyTxt.includes("buat postingan") ||
+                  bodyTxt.includes("create a public post") ||
+                  bodyTxt.includes("mulai diskusi") ||
+                  bodyTxt.includes("jual sesuatu") ||
+                  bodyTxt.includes("apa yang anda jual") ||
+                  bodyTxt.includes("diskusi");
+                return hasComposerPhrase || hasComposerPagelet;
+              },
+            }),
+            new Promise((r) => setTimeout(() => r(null), 1500))
+          ]);
           if (checkReady && checkReady[0] && checkReady[0].result) {
-            clearInterval(interval);
-            return resolve(true);
+            finish(true);
+            return;
           }
         }
-      } catch (e) {}
-
-      if (Date.now() - startTime > maxWaitMs) {
-        clearInterval(interval);
-        return resolve(true); // Tetap lanjut mencoba eksekusi meskipun status loading lambat
+      } catch (e) {} finally {
+        isChecking = false;
       }
-    }, 650);
+    }, 550);
   });
 }
 
@@ -1064,8 +1174,44 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   window.__metus_automation_running = true;
   document.documentElement.setAttribute("data-metus-automation-lock", "1");
 
-  console.log("[Metus Tab Automation v1.1.2] Memulai proses posting ke Facebook group (isAnonymous=" + isAnonymous + ")...");
-  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+  console.log("[Metus Tab Automation v1.1.9] Memulai proses posting ke Facebook group (isAnonymous=" + isAnonymous + ")...");
+
+  // PENTING: Gunakan timer berbasis Service Worker (METUS_BG_SLEEP) agar TIDAK PERNAH terkena
+  // Background Tab Intensive Timer Throttling (1000ms - 60000ms) dari Chrome saat tab berjalan di latar belakang (active: false)!
+  const sleep = (ms) =>
+    new Promise((res) => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          res();
+        }
+      };
+      const fallbackTimer = setTimeout(finish, ms + 1200);
+      try {
+        chrome.runtime.sendMessage({ action: "METUS_BG_SLEEP", ms }, () => {
+          void chrome.runtime.lastError;
+          clearTimeout(fallbackTimer);
+          finish();
+        });
+      } catch (e) {
+        clearTimeout(fallbackTimer);
+        setTimeout(finish, ms);
+      }
+    });
+
+  // Helper membangunkan render compositor Blink selama 90ms jika tab latar belakang belum me-mount GroupInlineComposer
+  const requestBlinkRenderPulse = () =>
+    new Promise((res) => {
+      try {
+        chrome.runtime.sendMessage({ action: "METUS_WAKE_TAB" }, () => {
+          void chrome.runtime.lastError;
+          res();
+        });
+      } catch (e) {
+        res();
+      }
+    });
 
   // Helper konversi DataURL (data:image/...) ke File secara sinkron TANPA fetch()
   // (Penting: fetch("data:...") diblokir oleh Content-Security-Policy Facebook!)
@@ -1245,6 +1391,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
 
   // 3. Cari TOMBOL PILL 'Tulis sesuatu...' (SELALU cari di card DAN di seluruh div[role="main"] agar tidak pernah gagal!)
   // PENTING: DILARANG KERAS memilih tombol 'Perasaan/aktivitas', 'Singgah', atau 'Postingan anonim'!
+  // Mendukung penuh Grup Diskusi standar maupun Grup Jual Beli (Diskusi / Mulai diskusi / Jual sesuatu / Apa yang Anda jual).
   function findComposerPill(card) {
     const mainArea = document.querySelector('div[role="main"]') || document.body;
     const scopes = [];
@@ -1252,7 +1399,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     if (!scopes.includes(mainArea)) scopes.push(mainArea);
     if (!scopes.includes(document.body)) scopes.push(document.body);
 
-    const targetPhrases = [
+    const priorityDiscussionPhrases = [
       "tulis sesuatu...",
       "tulis sesuatu…",
       "tulis sesuatu",
@@ -1270,8 +1417,17 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       "start discussion",
       "apa yang anda pikirkan",
       "what's on your mind",
+      "tulis postingan",
+      "buat kiriman"
+    ];
+
+    const buySellFallbackPhrases = [
+      "diskusi",
+      "discussion",
       "apa yang anda jual",
-      "what are you selling"
+      "what are you selling",
+      "jual sesuatu",
+      "sell something"
     ];
 
     const forbiddenWords = [
@@ -1290,17 +1446,23 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       "event"
     ];
 
-    // 1. Cari span atau div yang teksnya sendiri adalah "Tulis sesuatu..." di semua scope
+    // Pass 1: Utamakan tombol "Tulis sesuatu..." / "Buat postingan" / "Mulai diskusi"
     for (const scope of scopes) {
-      const elements = Array.from(scope.querySelectorAll('span, div[role="button"], div[tabindex="0"]'));
+      const elements = Array.from(scope.querySelectorAll('span, div[role="button"], div[tabindex="0"], [aria-placeholder]'));
       for (const el of elements) {
         if (isExcludedElement(el)) continue;
-        const ownText = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
-        if (!ownText || ownText.length > 85 || ownText.includes("\\n")) continue;
-        if (forbiddenWords.some((fw) => ownText.includes(fw))) {
-          continue;
-        }
-        if (targetPhrases.some((p) => ownText === p || ownText.startsWith(p) || ownText.includes(p))) {
+        const ownText = (
+          el.innerText ||
+          el.textContent ||
+          el.getAttribute("aria-label") ||
+          el.getAttribute("aria-placeholder") ||
+          el.getAttribute("placeholder") ||
+          ""
+        ).trim().toLowerCase();
+        if (!ownText || ownText.length > 90 || ownText.includes("\\n")) continue;
+        if (forbiddenWords.some((fw) => ownText.includes(fw))) continue;
+
+        if (priorityDiscussionPhrases.some((p) => ownText === p || ownText.startsWith(p) || ownText.includes(p))) {
           const clickableAncestor = el.closest('div[role="button"]') || el.closest('[tabindex="0"]');
           if (clickableAncestor) {
             const ancText = (clickableAncestor.innerText || clickableAncestor.textContent || "").trim().toLowerCase();
@@ -1319,7 +1481,26 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       }
     }
 
-    // 2. Jika masih belum ketemu dan card ada, cari tombol pertama di dalam card yang BUKAN tombol Anonim / Foto / Perasaan / Singgah / Profil
+    // Pass 2: Untuk Grup Jual Beli (Buy & Sell Group), cari tombol "Diskusi" atau "Apa yang Anda jual" / "Jual sesuatu"
+    for (const scope of scopes) {
+      const elements = Array.from(scope.querySelectorAll('span, div[role="button"], div[tabindex="0"]'));
+      for (const el of elements) {
+        if (isExcludedElement(el)) continue;
+        const ownText = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
+        if (!ownText || ownText.length > 85 || ownText.includes("\\n")) continue;
+        if (forbiddenWords.some((fw) => ownText.includes(fw))) continue;
+
+        if (buySellFallbackPhrases.some((p) => ownText === p || ownText.startsWith(p))) {
+          const clickableAncestor = el.closest('div[role="button"]') || el.closest('[tabindex="0"]');
+          if (clickableAncestor) {
+            return clickableAncestor;
+          }
+          return el.parentElement || el;
+        }
+      }
+    }
+
+    // Pass 3: Jika masih belum ketemu dan card ada, cari tombol pertama di dalam card yang BUKAN tombol Anonim / Foto / Perasaan / Singgah / Profil
     if (card) {
       const cardButtons = Array.from(card.querySelectorAll('div[role="button"], div[tabindex="0"]'));
       for (const b of cardButtons) {
@@ -1596,13 +1777,13 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     } catch (e) {}
   }
 
-  // 5. Temukan dan klik tombol 'Tulis sesuatu...'
+  // 5. Temukan dan klik tombol 'Tulis sesuatu...' (Dilengkapi Blink Render Pulse untuk silent background tab!)
   dismissGroupRulesModals();
   let composerCard = null;
   let composerPill = null;
   let anonCardBtn = null;
 
-  for (let attempt = 0; attempt < 10; attempt++) {
+  for (let attempt = 0; attempt < 12; attempt++) {
     dismissGroupRulesModals();
     composerCard = findGroupComposerCard();
     if (isAnonymous) {
@@ -1612,11 +1793,19 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     if (composerPill || (isAnonymous && anonCardBtn)) {
       break;
     }
-    window.scrollBy({ top: 90, behavior: "instant" });
-    await sleep(600);
+
+    // Jika di background tab (active: false) GroupInlineComposer belum di-mount oleh Blink IntersectionObserver,
+    // kirim sinyal 90ms render pulse ke Service Worker agar Facebook langsung merender kartu komposer!
+    if (attempt === 2 || attempt === 6) {
+      console.log("[Metus Silent Engine] Memicu Blink Render Pulse agar komposer grup ter-mount (attempt=" + attempt + ")...");
+      await requestBlinkRenderPulse();
+    }
+
+    window.scrollBy({ top: attempt % 2 === 0 ? 120 : -80, behavior: "instant" });
+    await sleep(450);
   }
 
-  const primaryTrigger = (isAnonymous && anonCardBtn) ? anonCardBtn : composerPill;
+  let primaryTrigger = (isAnonymous && anonCardBtn) ? anonCardBtn : composerPill;
   if (!primaryTrigger) {
     return {
       success: false,
@@ -1626,14 +1815,27 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
 
   console.log("[Metus] Mengetuk pembuka komposer 'Tulis sesuatu...' (isAnonymous=" + isAnonymous + "):", primaryTrigger);
   clickComposerTriggerThoroughly(primaryTrigger);
-  await sleep(1400);
+  await sleep(950);
+
+  // Khusus Grup Jual Beli (Buy & Sell Group): Jika tombol yang baru saja diklik adalah tab "Diskusi" pada kartu komposer,
+  // maka kartu komposer kini menampilkan tombol "Tulis sesuatu...". Cari dan klik "Tulis sesuatu..." sekarang!
+  if (!document.querySelector('div[role="dialog"], div[aria-modal="true"]')) {
+    const updatedPill = findComposerPill(findGroupComposerCard());
+    if (updatedPill && updatedPill !== primaryTrigger) {
+      console.log("[Metus Buy/Sell Group] Mengklik kotak 'Tulis sesuatu...' setelah tab Diskusi aktif:", updatedPill);
+      primaryTrigger = updatedPill;
+      composerPill = updatedPill;
+      clickComposerTriggerThoroughly(updatedPill);
+      await sleep(850);
+    }
+  }
 
   if (isAnonymous) {
     await clickAnonymousIntroConfirmIfPresent();
     if (!document.querySelector('div[role="dialog"], div[aria-modal="true"]') && composerPill && primaryTrigger !== composerPill) {
       console.log("[Metus Anonymous] Membuka dialog utama via kotak Tulis sesuatu...");
       clickComposerTriggerThoroughly(composerPill);
-      await sleep(1200);
+      await sleep(900);
     }
   }
 
@@ -1641,7 +1843,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   let activeContainer = null;
   let editor = null;
 
-  for (let poll = 0; poll < 22; poll++) {
+  for (let poll = 0; poll < 18; poll++) {
     dismissGroupRulesModals();
     if (isAnonymous) {
       await clickAnonymousIntroConfirmIfPresent();
@@ -1667,25 +1869,26 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
         if (backBtn) {
           console.log("[Metus Guard] Keluar dari sub-dialog Perasaan/Lokasi kembali ke Buat Postingan...");
           triggerRealisticClick(backBtn);
-          await sleep(800);
+          await sleep(600);
           continue;
         }
       }
 
       const formatChoice = Array.from(dlg.querySelectorAll('div[role="button"], span')).find((el) => {
         const t = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
-        return t === "diskusi" || t === "mulai diskusi" || t === "buat postingan publik" || t === "discussion";
+        return t === "diskusi" || t === "mulai diskusi" || t === "buat postingan publik" || t === "buat postingan diskusi" || t === "discussion";
       });
       if (formatChoice) {
         const choiceBtn = formatChoice.closest('div[role="button"]') || formatChoice;
         triggerRealisticClick(choiceBtn);
-        await sleep(1000);
+        await sleep(750);
       }
 
       const dlgEditor =
         dlg.querySelector('div[role="textbox"][contenteditable="true"]') ||
         dlg.querySelector('div[data-lexical-editor="true"]') ||
-        dlg.querySelector('div[contenteditable="true"]');
+        dlg.querySelector('div[contenteditable="true"]') ||
+        dlg.querySelector('textarea');
 
       if (dlgEditor) {
         const ariaLbl = (dlgEditor.getAttribute('aria-label') || dlgEditor.getAttribute('placeholder') || dlgEditor.getAttribute('aria-placeholder') || '').toLowerCase();
@@ -1717,17 +1920,20 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       }
     }
 
-    // C. Retry klik ulang HANYA pada tombol 'Tulis sesuatu...' (JANGAN PERNAH klik tombol Perasaan/aktivitas!)
-    if (poll === 4 || poll === 9 || poll === 14) {
+    // C. Retry klik ulang pada tombol 'Tulis sesuatu...' + Blink Render Pulse jika dialog belum terbuka
+    if (poll === 3 || poll === 7 || poll === 11) {
+      if (poll === 7) {
+        await requestBlinkRenderPulse();
+      }
       const freshPill = findComposerPill(composerCard) || composerPill;
       if (freshPill) {
         console.log("[Metus Retry] Mengklik ulang pill 'Tulis sesuatu...' (poll=" + poll + ")");
         clickComposerTriggerThoroughly(freshPill);
       }
-      await sleep(850);
+      await sleep(600);
     }
 
-    await sleep(550);
+    await sleep(450);
   }
 
   if (!editor) {
@@ -1751,7 +1957,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       };
     }
 
-    await sleep(900);
+    await sleep(600);
     const refreshedDialogs = Array.from(document.querySelectorAll('div[role="dialog"], div[aria-modal="true"]'));
     for (const rDlg of refreshedDialogs) {
       const rEd =
@@ -1766,12 +1972,10 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     }
     console.log("[Metus Anonymous] Mode Anggota Anonim aktif! Editor siap diisi.");
   } else {
-    // Jika pengguna TIDAK mencentang Anonymous Mode, pastikan sakelar Anonim Facebook DIMATIKAN
-    // (karena Facebook sering mengingat status Anonim ON dari postingan sebelumnya!)
     if (isDialogCurrentlyAnonymous(activeContainer)) {
       console.log("[Metus Normal Mode] Terdeteksi sakelar Anonim masih aktif dari sesi sebelumnya. Mematikan sakelar Anonim...");
       await disableAnonymousSwitchInDialog(activeContainer);
-      await sleep(900);
+      await sleep(600);
       const refreshedDialogs = Array.from(document.querySelectorAll('div[role="dialog"], div[aria-modal="true"]'));
       for (const rDlg of refreshedDialogs) {
         const rEd =
@@ -1789,9 +1993,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   }
 
   // 7. Fokus dan masukkan teks promosi ke dalam editor Lexical Facebook DENGAN FORMAT BARIS / ENTER 1:1 SESUAI DASHBOARD!
-  // PENTING: Jangan kirim seluruh teks multi-baris sekaligus ke execCommand("insertText") karena Lexical Facebook
-  // akan menghapus karakter newline dan menggabungkan semua kalimat menjadi 1 paragraf rapat!
-  // Solusi: Masukkan baris demi baris dan kirim sinyal pindah paragraf (InputEvent insertParagraph / Shift+Enter) di setiap baris.
+  // PENTING: Dilakukan secara SINKRON (< 15ms) tanpa sleep per baris agar tidak pernah lambat di background tab!
   if (editor.getAttribute("data-metus-typed") !== "1") {
     editor.setAttribute("data-metus-typed", "1");
 
@@ -1804,9 +2006,8 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       editor.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
       editor.click();
     } catch (e) {}
-    await sleep(350);
+    await sleep(200);
 
-    // Pasang Selection Range secara eksplisit di ujung akhir editor
     function anchorSelectionAtEnd(targetEd) {
       try {
         const sel = window.getSelection();
@@ -1820,95 +2021,149 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       } catch (e) {}
     }
 
-    anchorSelectionAtEnd(editor);
-
-    // Bersihkan isi editor terlebih dahulu jika ada sisa teks
-    try {
-      document.execCommand("selectAll", false, null);
-      document.execCommand("delete", false, null);
-    } catch (e) {}
-    await sleep(150);
-
-    anchorSelectionAtEnd(editor);
-
-    const normalizedContent = String(contentToPost || "").replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
-    const lines = normalizedContent.split("\\n");
-
-    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      const lineStr = lines[lineIdx];
-
-      if (lineStr.length > 0) {
-        let insertedLine = false;
-        try {
-          insertedLine = document.execCommand("insertText", false, lineStr);
-        } catch (e) {
-          insertedLine = false;
+    if (editor.tagName === "TEXTAREA" || editor.tagName === "INPUT") {
+      try {
+        const proto = editor.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const nativeValSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+        if (nativeValSetter) {
+          nativeValSetter.call(editor, String(contentToPost || ""));
+        } else {
+          editor.value = String(contentToPost || "");
         }
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+        editor.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (e) {}
+    } else {
+      anchorSelectionAtEnd(editor);
 
-        if (!insertedLine) {
+      try {
+        document.execCommand("selectAll", false, null);
+        document.execCommand("delete", false, null);
+      } catch (e) {}
+
+      anchorSelectionAtEnd(editor);
+
+      const normalizedContent = String(contentToPost || "").replace(/\\r\\n/g, "\\n").replace(/\\r/g, "\\n");
+      const lines = normalizedContent.split("\\n");
+
+      for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+        const lineStr = lines[lineIdx];
+
+        if (lineStr.length > 0) {
+          let insertedLine = false;
           try {
-            const beforeTxt = new InputEvent("beforeinput", {
-              bubbles: true,
-              cancelable: true,
-              inputType: "insertText",
-              data: lineStr,
-            });
-            editor.dispatchEvent(beforeTxt);
-          } catch (e) {}
-        }
-      }
-
-      // Jika masih ada baris berikutnya, buat baris baru (Enter / Paragraph Break) asli di Lexical Editor
-      if (lineIdx < lines.length - 1) {
-        let paragraphCreated = false;
-        try {
-          const beforeParaEvt = new InputEvent("beforeinput", {
-            bubbles: true,
-            cancelable: true,
-            inputType: "insertParagraph",
-          });
-          editor.dispatchEvent(beforeParaEvt);
-          if (beforeParaEvt.defaultPrevented) {
-            paragraphCreated = true;
+            insertedLine = document.execCommand("insertText", false, lineStr);
+          } catch (e) {
+            insertedLine = false;
           }
-        } catch (e) {}
 
-        if (!paragraphCreated) {
+          if (!insertedLine) {
+            try {
+              const beforeTxt = new InputEvent("beforeinput", {
+                bubbles: true,
+                cancelable: true,
+                inputType: "insertText",
+                data: lineStr,
+              });
+              editor.dispatchEvent(beforeTxt);
+            } catch (e) {}
+          }
+        }
+
+        if (lineIdx < lines.length - 1) {
+          let paragraphCreated = false;
           try {
-            const enterKeyEvt = new KeyboardEvent("keydown", {
-              key: "Enter",
-              code: "Enter",
-              keyCode: 13,
-              which: 13,
-              shiftKey: true,
+            const beforeParaEvt = new InputEvent("beforeinput", {
               bubbles: true,
               cancelable: true,
+              inputType: "insertParagraph",
             });
-            editor.dispatchEvent(enterKeyEvt);
-            if (enterKeyEvt.defaultPrevented) {
+            editor.dispatchEvent(beforeParaEvt);
+            if (beforeParaEvt.defaultPrevented) {
               paragraphCreated = true;
             }
           } catch (e) {}
-        }
 
-        if (!paragraphCreated) {
-          try {
-            document.execCommand("insertParagraph", false, null);
-          } catch (e) {}
-        }
+          if (!paragraphCreated) {
+            try {
+              const enterKeyEvt = new KeyboardEvent("keydown", {
+                key: "Enter",
+                code: "Enter",
+                keyCode: 13,
+                which: 13,
+                shiftKey: true,
+                bubbles: true,
+                cancelable: true,
+              });
+              editor.dispatchEvent(enterKeyEvt);
+              if (enterKeyEvt.defaultPrevented) {
+                paragraphCreated = true;
+              }
+            } catch (e) {}
+          }
 
-        await sleep(35);
+          if (!paragraphCreated) {
+            try {
+              document.execCommand("insertParagraph", false, null);
+            } catch (e) {}
+          }
+        }
       }
     }
 
-    await sleep(600);
+    await sleep(350);
   }
 
-  await sleep(600);
+  // 7a-extra: Jika grup ini adalah Grup Jual Beli (Buy & Sell) yang membuka form "Buat tawaran" (input Judul & Harga wajib),
+  // isi otomatis kolom Judul, Harga, dan Keterangan agar tombol Posting/Berikutnya langsung aktif!
+  function fillBuySellListingInputsIfPresent(dlg, rawText) {
+    if (!dlg) return;
+    try {
+      const lines = String(rawText || "").split("\\n").map((l) => l.trim()).filter(Boolean);
+      const firstLineTitle = (lines[0] || "Info Kost & Kontrakan Nyaman").replace(/[*_~]/g, "").slice(0, 75);
+      const priceMatch = String(rawText || "").match(/(?:rp\\.?\\s*)?(\\d{2,3}(?:[.,]\\d{3})+)/i);
+      const extractedPrice = priceMatch && priceMatch[1] ? priceMatch[1].replace(/\\D/g, "") : "500000";
+
+      const setReactInputValue = (inp, val) => {
+        if (!inp || inp.value) return;
+        const proto = inp.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+        if (setter) {
+          setter.call(inp, val);
+        } else {
+          inp.value = val;
+        }
+        inp.dispatchEvent(new Event("input", { bubbles: true }));
+        inp.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+
+      const allInputs = Array.from(dlg.querySelectorAll('input:not([type="file"]):not([type="checkbox"]):not([type="radio"]), textarea'));
+      for (const inp of allInputs) {
+        const labelWrapper = inp.closest("label") || inp.parentElement?.parentElement;
+        const meta = (
+          (inp.getAttribute("aria-label") || "") +
+          " " +
+          (inp.getAttribute("placeholder") || "") +
+          " " +
+          (labelWrapper ? (labelWrapper.innerText || labelWrapper.textContent || "") : "")
+        ).toLowerCase();
+
+        if (meta.includes("judul") || meta.includes("title") || meta.includes("apa yang anda jual")) {
+          setReactInputValue(inp, firstLineTitle);
+        } else if (meta.includes("harga") || meta.includes("price")) {
+          setReactInputValue(inp, extractedPrice);
+        } else if (meta.includes("keterangan") || meta.includes("deskripsi") || meta.includes("description")) {
+          setReactInputValue(inp, String(rawText || ""));
+        }
+      }
+    } catch (e) {}
+  }
+
+  fillBuySellListingInputsIfPresent(activeContainer, contentToPost);
 
   // 7b. LAMPIRKAN SEMUA FOTO KE DIALOG FACEBOOK (MULTI-FOTO 1-10+, ANTI FALSE-POSITIVE & TUNGGU UPLOAD 100% SELESAI)
   if (Array.isArray(photoUrls) && photoUrls.length > 0) {
-    console.log("[Metus Photo Engine v1.1.6] Menyiapkan " + photoUrls.length + " foto untuk diunggah ke postingan...");
+    console.log("[Metus Photo Engine v1.1.9] Menyiapkan " + photoUrls.length + " foto untuk diunggah ke postingan...");
     try {
       const dt = new DataTransfer();
       const fileObjects = [];
@@ -1921,28 +2176,23 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       }
 
       if (dt.files.length > 0) {
-        // PENTING: Fungsi cek apakah preview foto ASLI sudah masuk ke dalam dialog Facebook.
-        // JANGAN mengecek img[src^="data:"] karena ikon UI Facebook di dalam dialog menggunakan data:image/svg+xml atau data:image/png!
-        // JANGAN mengecek [aria-label*="Tambahkan Foto/Video"] karena itu adalah tombol dropzone kosong SEBELUM foto masuk!
         const hasRealPhotoPreviewInDialog = () => {
           const dlg = document.querySelector('div[role="dialog"]') || activeContainer;
           if (!dlg) return false;
-          // 1. Cek gambar blob: yang dibuat Facebook saat file foto lokal berhasil dilampirkan
-          const blobImgs = dlg.querySelectorAll('img[src^="blob:"]');
-          if (blobImgs.length > 0) return true;
-          // 2. Cek tombol kontrol yang HANYA muncul setelah foto terlampir di preview dialog
+          const blobImgs = dlg.querySelectorAll('img[src^="blob:"], img[src*="scontent"]');
+          // Di dalam dialog, gambar profil user biasanya hanya 1 buah (ukuran kecil <= 48px). Jika ada gambar blob: atau >1 gambar, berarti preview foto sudah masuk.
+          if (dlg.querySelectorAll('img[src^="blob:"]').length > 0) return true;
+          if (blobImgs.length >= 2) return true;
           const mediaControls = dlg.querySelectorAll(
             '[aria-label*="Hapus foto" i], [aria-label*="Remove photo" i], [aria-label*="Hapus media" i], [aria-label*="Remove media" i], [aria-label*="Edit foto" i], [aria-label*="Edit photo" i], [aria-label*="Edit Semua" i], [aria-label*="Edit All" i]'
           );
           return mediaControls.length > 0;
         };
 
-        // Fungsi setter files React-compatible pada elemen <input type="file">
         const assignFilesToInput = (inputEl, customDt) => {
           if (!inputEl) return false;
           const transferObj = customDt || dt;
           try {
-            // Pastikan atribut multiple aktif jika kita mengunggah > 1 foto
             if (transferObj.files.length > 1) {
               try {
                 inputEl.setAttribute("multiple", "multiple");
@@ -1964,13 +2214,11 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
           }
         };
 
-        // PENTING: Hanya cari <input type="file"> DI DALAM DIALOG KOMPOSER (jangan mengambil input file milik halaman grup di luar dialog!)
         const findDialogFileInput = () => {
           const dlg = document.querySelector('div[role="dialog"]') || activeContainer;
           if (!dlg) return null;
           const dialogInputs = Array.from(dlg.querySelectorAll('input[type="file"]'));
           if (dialogInputs.length === 0) return null;
-          // Prioritaskan input file di dalam dialog yang menerima gambar & multiple
           const multiImgInput = dialogInputs.find(
             (inp) => (inp.getAttribute("accept") || "").includes("image") && inp.hasAttribute("multiple")
           );
@@ -1980,7 +2228,6 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
           return dialogInputs[dialogInputs.length - 1];
         };
 
-        // Helper klik tombol "Foto/video" di dalam dialog sambil menangkap <input type="file"> yang di-trigger Facebook
         const clickDialogPhotoButtonAndCaptureInput = async () => {
           let capturedInput = null;
           const origClick = HTMLInputElement.prototype.click;
@@ -2020,6 +2267,8 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
                     t === "photo/video" ||
                     t === "tambahkan foto/video" ||
                     t === "add photos/videos" ||
+                    t === "tambahkan foto" ||
+                    t === "add photos" ||
                     t.includes("tambahkan foto/video") ||
                     t.includes("add photos/videos")
                   );
@@ -2030,7 +2279,7 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
                 const clickablePhotoBtn = photoBtn.closest('div[role="button"]') || photoBtn;
                 console.log("[Metus Photo Engine] Mengklik tombol Foto/Video di dalam dialog:", clickablePhotoBtn);
                 triggerRealisticClick(clickablePhotoBtn);
-                await sleep(1000);
+                await sleep(750);
               }
             }
           } finally {
@@ -2040,8 +2289,6 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
           return capturedInput || findDialogFileInput();
         };
 
-        // TAHAP 1: Cek apakah di dalam dialog sudah ada <input type="file">.
-        // Jika belum ada, klik ikon "Foto/video" di dalam dialog agar Facebook memunculkan dropzone & <input type="file">!
         let targetInput = findDialogFileInput();
         if (!targetInput) {
           targetInput = await clickDialogPhotoButtonAndCaptureInput();
@@ -2050,11 +2297,9 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
         if (targetInput) {
           console.log("[Metus Photo Engine] Menyuntikkan " + dt.files.length + " foto ke <input type='file'> dialog:", targetInput);
           assignFilesToInput(targetInput, dt);
-          await sleep(1800);
+          await sleep(1200);
         }
 
-        // TAHAP 2: Jika preview blob foto belum muncul di dalam dialog, klik tombol "Foto/video" / "Tambahkan Foto/Video"
-        // lalu suntikkan ke seluruh <input type="file"> yang ada di dalam dialog!
         if (!hasRealPhotoPreviewInDialog()) {
           console.log("[Metus Photo Engine] Preview belum terlihat, membuka dropzone Foto/Video di dialog...");
           const captured2 = await clickDialogPhotoButtonAndCaptureInput();
@@ -2066,11 +2311,9 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
           for (const inp of allDlgInputs) {
             assignFilesToInput(inp, dt);
           }
-          await sleep(2000);
+          await sleep(1200);
         }
 
-        // TAHAP 3: Fallback ClipboardEvent("paste") langsung ke Lexical Editor jika preview masih belum muncul
-        // (Kita paste satu per satu file agar bila ada 4 foto, keempatnya masuk semua ke komposer Facebook!)
         if (!hasRealPhotoPreviewInDialog() && editor) {
           console.log("[Metus Photo Engine] Menjalankan fallback ClipboardEvent paste per foto ke editor...");
           try {
@@ -2084,15 +2327,14 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
                 clipboardData: singleDt,
               });
               editor.dispatchEvent(pasteEvt);
-              await sleep(650);
+              await sleep(300);
             }
-            await sleep(1500);
+            await sleep(900);
           } catch (pasteErr) {
             console.warn("[Metus Photo Engine] Paste fallback warning:", pasteErr);
           }
         }
 
-        // TAHAP 4: Fallback Drag & Drop ke dropzone / editor
         if (!hasRealPhotoPreviewInDialog()) {
           console.log("[Metus Photo Engine] Menjalankan fallback DragEvent drop ke dialog...");
           try {
@@ -2105,64 +2347,60 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
               dropTarget.dispatchEvent(new DragEvent("dragenter", { bubbles: true, cancelable: true, dataTransfer: dt }));
               dropTarget.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: dt }));
               dropTarget.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
-              await sleep(2200);
+              await sleep(1200);
             }
           } catch (dropErr) {
             console.warn("[Metus Photo Engine] Drop fallback warning:", dropErr);
           }
         }
 
-        // TAHAP 5: TUNGGU PROSES UPLOAD SEMUA FOTO SELESAI SEBELUM KLIK POSTING
-        // Selama Facebook masih mengunggah foto ke server (terutama jika 4 foto sekaligus),
-        // tombol 'Posting' akan memiliki aria-disabled="true" atau ada [role="progressbar"].
+        // Tunggu proses upload foto ke server Facebook selesai (maksimal ~10 detik dengan early-exit)
         console.log("[Metus Photo Engine] Menunggu Facebook menyelesaikan upload " + dt.files.length + " foto...");
-        for (let waitIdx = 0; waitIdx < 30; waitIdx++) {
+        for (let waitIdx = 0; waitIdx < 16; waitIdx++) {
           const dlg = document.querySelector('div[role="dialog"]') || activeContainer || document;
           const progressBars = dlg.querySelectorAll('[role="progressbar"]');
           const submitBtnNow = dlg.querySelector(
-            'div[aria-label="Posting"][role="button"], div[aria-label="Post"][role="button"], div[aria-label="Kirim"][role="button"], div[aria-label="Submit"][role="button"]'
+            'div[aria-label="Posting"][role="button"], div[aria-label="Post"][role="button"], div[aria-label="Kirim"][role="button"], div[aria-label="Submit"][role="button"], div[aria-label="Berikutnya"][role="button"], div[aria-label="Next"][role="button"]'
           );
           const isBtnDisabled = submitBtnNow ? submitBtnNow.getAttribute("aria-disabled") === "true" : false;
           const isUploading = progressBars.length > 0 || isBtnDisabled;
 
-          if (!isUploading && waitIdx >= 4) {
+          if (!isUploading && waitIdx >= 2) {
             break;
           }
-          await sleep(850);
+          await sleep(600);
         }
-        // Tambahan jeda stabilisasi 2.5 detik agar seluruh attachment ID foto terikat penuh pada draft postingan
-        await sleep(2500);
+        await sleep(1000);
       }
     } catch (photoErr) {
       console.warn("[Metus] Gagal melampirkan foto otomatis:", photoErr);
     }
   }
 
+  // Pastikan kembali kolom Judul/Harga terisi jika form Jual Beli baru memunculkan input setelah foto masuk
+  fillBuySellListingInputsIfPresent(document.querySelector('div[role="dialog"]') || activeContainer, contentToPost);
+
   // 8. Cari tombol Posting / Kirim / Submit di dalam dialog
-  // Pada Mode Anonim, tombol kirim Facebook sering berubah menjadi "Kirim" atau "Submit"
-  const submitWords = ["posting", "post", "kirim", "submit", "kirimkan", "publish", "bagikan", "berikutnya", "next"];
+  const submitWords = ["posting", "post", "kirim", "submit", "kirimkan", "publish", "bagikan", "berikutnya", "next", "terbitkan"];
 
   function findSubmitButton(container) {
     if (!container) return null;
     const allButtons = Array.from(container.querySelectorAll('div[role="button"], button'));
 
-    // 1. Pencocokan atribut aria-label persis
     for (const b of allButtons) {
       const aria = (b.getAttribute("aria-label") || "").trim().toLowerCase();
-      if (aria === "posting" || aria === "post" || aria === "kirim" || aria === "submit" || aria === "kirimkan") {
+      if (aria === "posting" || aria === "post" || aria === "kirim" || aria === "submit" || aria === "kirimkan" || aria === "terbitkan") {
         return b;
       }
     }
 
-    // 2. Pencocokan teks tombol persis (gunakan innerText || textContent untuk silent background tab)
     for (const b of allButtons) {
       const txt = (b.innerText || b.textContent || "").trim().toLowerCase();
-      if (txt === "posting" || txt === "post" || txt === "kirim" || txt === "submit" || txt === "kirimkan") {
+      if (txt === "posting" || txt === "post" || txt === "kirim" || txt === "submit" || txt === "kirimkan" || txt === "terbitkan") {
         return b;
       }
     }
 
-    // 3. Pencocokan awalan
     for (const b of allButtons) {
       const aria = (b.getAttribute("aria-label") || "").trim().toLowerCase();
       if (submitWords.some((w) => aria === w || aria.startsWith(w))) {
@@ -2179,7 +2417,6 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       }
     }
 
-    // 4. Tombol aksi utama di bagian bawah dialog (lebar > 110px)
     for (let idx = allButtons.length - 1; idx >= 0; idx--) {
       const b = allButtons[idx];
       const rect = b.getBoundingClientRect();
@@ -2197,8 +2434,9 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
   }
 
   let postButton = null;
-  for (let attempt = 0; attempt < 20; attempt++) {
+  for (let attempt = 0; attempt < 14; attempt++) {
     const searchArea = activeContainer || document.querySelector('div[role="dialog"]') || document.querySelector('div[aria-modal="true"]');
+    fillBuySellListingInputsIfPresent(searchArea, contentToPost);
     postButton = findSubmitButton(searchArea);
 
     if (postButton) {
@@ -2209,12 +2447,13 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
       if (!disabled) break;
     }
 
-    // Beri trigger input ringan tanpa menambah karakter apapun
-    editor.focus();
-    try {
-      editor.dispatchEvent(new Event("input", { bubbles: true }));
-    } catch (e) {}
-    await sleep(650);
+    if (editor) {
+      editor.focus();
+      try {
+        editor.dispatchEvent(new Event("input", { bubbles: true }));
+      } catch (e) {}
+    }
+    await sleep(500);
   }
 
   if (!postButton) {
@@ -2224,12 +2463,12 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
     };
   }
 
-  // Jika tombol berlabel "Berikutnya" / "Next", klik dulu
-  const btnLabel = (postButton.getAttribute("aria-label") || postButton.innerText || "").toLowerCase();
+  // Jika tombol berlabel "Berikutnya" / "Next" (sering terjadi di Grup Jual Beli), klik dulu lalu cari tombol Posting/Terbitkan
+  const btnLabel = (postButton.getAttribute("aria-label") || postButton.innerText || postButton.textContent || "").toLowerCase();
   if (btnLabel.includes("berikutnya") || btnLabel.includes("next")) {
     console.log("[Metus] Mengklik tombol Berikutnya:", postButton);
     triggerSingleSubmitClick(postButton);
-    await sleep(1500);
+    await sleep(1200);
 
     const dialog = document.querySelector('div[role="dialog"]') || activeContainer;
     postButton = findSubmitButton(dialog) || postButton;
@@ -2266,15 +2505,15 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
 
   // Klik TUNGGAL pada tombol Posting agar tidak memicu double-submit pada CometPressable
   triggerSingleSubmitClick(postButton);
-  await sleep(3500);
+  await sleep(2500);
 
-  // 9. Cek verifikasi status postingan
-  for (let c = 0; c < 15; c++) {
+  // 9. Cek verifikasi status postingan (maks ~6 detik dengan Service Worker sleep)
+  for (let c = 0; c < 10; c++) {
     const dialogStillOpen = document.querySelector('div[role="dialog"]') || document.querySelector('div[aria-modal="true"]');
     if (!dialogStillOpen) {
       break;
     }
-    const dialogText = (dialogStillOpen.innerText || "").toLowerCase();
+    const dialogText = (dialogStillOpen.innerText || dialogStillOpen.textContent || "").toLowerCase();
     if (
       dialogText.includes("persetujuan") ||
       dialogText.includes("pending") ||
@@ -2287,7 +2526,63 @@ async function executeFacebookPostAutomation(contentToPost, firstCommentText, ph
         message: "Postingan berhasil dikirim dan sedang menunggu persetujuan admin grup."
       };
     }
-    await sleep(600);
+    await sleep(500);
+  }
+
+  // 10. Jika pengguna mengisi Auto First Comment (firstCommentText), kirim komentar pertama pada postingan yang baru terbit
+  const cleanFirstComment = String(firstCommentText || "").trim();
+  if (cleanFirstComment.length > 0) {
+    try {
+      await sleep(1600);
+      const articles = Array.from(document.querySelectorAll('div[role="article"], article'));
+      const firstPostArticle = articles[0] || document.querySelector('div[role="feed"]') || document.body;
+      let commentInput = firstPostArticle.querySelector(
+        'div[contenteditable="true"][role="textbox"][aria-label*="komentar" i], div[contenteditable="true"][role="textbox"][aria-label*="comment" i]'
+      );
+
+      if (!commentInput) {
+        const commentTriggerBtn = Array.from(firstPostArticle.querySelectorAll('div[role="button"], span')).find((el) => {
+          const t = (el.innerText || el.textContent || el.getAttribute("aria-label") || "").trim().toLowerCase();
+          return t === "komentari" || t === "komentar" || t === "comment" || t === "tulis komentar";
+        });
+        if (commentTriggerBtn) {
+          triggerRealisticClick(commentTriggerBtn.closest('div[role="button"]') || commentTriggerBtn);
+          await sleep(900);
+          commentInput = document.querySelector(
+            'div[contenteditable="true"][role="textbox"][aria-label*="komentar" i], div[contenteditable="true"][role="textbox"][aria-label*="comment" i]'
+          );
+        }
+      }
+
+      if (commentInput) {
+        commentInput.focus();
+        await sleep(200);
+        try {
+          document.execCommand("selectAll", false, null);
+          document.execCommand("delete", false, null);
+          document.execCommand("insertText", false, cleanFirstComment);
+        } catch (e) {}
+        await sleep(300);
+        const enterEvt = new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true
+        });
+        commentInput.dispatchEvent(enterEvt);
+        const submitCommentBtn = firstPostArticle.querySelector(
+          'div[aria-label="Komentari"][role="button"], div[aria-label="Comment"][role="button"], [type="submit"]'
+        );
+        if (submitCommentBtn && submitCommentBtn.getAttribute("aria-disabled") !== "true") {
+          triggerSingleSubmitClick(submitCommentBtn);
+        }
+        await sleep(1200);
+      }
+    } catch (commentErr) {
+      console.warn("[Metus] Auto First Comment warning:", commentErr);
+    }
   }
 
   return {
@@ -2519,7 +2814,10 @@ function autoScanGroups() {
   }
 }
 
-setTimeout(autoScanGroups, 3000);
+// Jangan jalankan autoScanGroups pada tab background otomasi posting (sorting_setting=CHRONOLOGICAL)
+if (!window.location.search.includes("sorting_setting=CHRONOLOGICAL")) {
+  setTimeout(autoScanGroups, 3000);
+}
 
 // Listener kirim postingan otomatis
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -2766,7 +3064,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   {
     name: 'dashboard_bridge.js',
     description: 'Content script yang menyuntikkan data grup tersimpan langsung ke Web Dashboard athay04-cloud.github.io/autopost/',
-    content: `// Metus Extension Bridge v1.1.3 untuk Dashboard (Anti-Timeout 120s, Orphaned Script Guard, Direct DOM Anonymous Reader)
+    content: `// Metus Extension Bridge v1.1.9 untuk Dashboard (Anti-Throttle Timer, Dual-Channel Result, Anti-Duplicate Listener)
 if (
   window.location.hostname === "athay04-cloud.github.io" &&
   !window.location.pathname.startsWith("/autopost")
@@ -2785,15 +3083,20 @@ function isExtensionContextAlive() {
 }
 
 if (isExtensionContextAlive()) {
+  // Bersihkan listener lama jika bridge pernah disuntikkan sebelumnya di tab ini
+  if (window.__metus_prev_window_msg_handler) {
+    try {
+      window.removeEventListener("message", window.__metus_prev_window_msg_handler);
+    } catch (e) {}
+  }
+
+  const isFirstBridgeLoadInTab = !window.__metus_dashboard_bridge_loaded;
   window.__metus_dashboard_bridge_loaded = true;
   document.documentElement.setAttribute("data-metus-bridge-active", "1");
-  // Set "1.0.9" untuk kompatibilitas mundur dengan bundle lama di athay04-cloud.github.io/autopost/
-  // sekaligus set "data-metus-ext-version" = "1.1.6"
-  document.documentElement.setAttribute("data-metus-bridge-version", "1.0.9");
-  document.documentElement.setAttribute("data-metus-ext-version", "1.1.8");
-  console.log("[Metus Bridge v1.1.8] Active & connected to Web Dashboard (Anti-Perasaan + Instant Scan + 1:1 Linebreaks + Multi-Photo).");
+  document.documentElement.setAttribute("data-metus-bridge-version", "1.2.0");
+  document.documentElement.setAttribute("data-metus-ext-version", "1.2.0");
+  console.log("[Metus Bridge v1.2.0] Active & connected to Web Dashboard (Anti-Throttle Timer + Auto-Comment + Queue Abort + Buy/Sell Support + 1:1 Linebreaks + Multi-Photo).");
 
-  // Sembunyikan banner peringatan lama "perlu diperbarui ke v1.0.9" jika ekstensi v1.1.6 sudah aktif
   function hideLegacyUpdateBanner() {
     try {
       const divs = document.querySelectorAll("div");
@@ -2816,7 +3119,6 @@ if (isExtensionContextAlive()) {
   let lastBridgePostTime = 0;
   let pendingSyncTimer = null;
 
-  // Prioritaskan pembacaan langsung kotak centang "Anonymous Mode" yang sedang tampil di layar pengguna!
   function detectAnonymousModeFromDom(eventData) {
     try {
       const labels = Array.from(document.querySelectorAll("label"));
@@ -2834,7 +3136,6 @@ if (isExtensionContextAlive()) {
     return false;
   }
 
-  // Ambil daftar foto dari payload eventData ATAU langsung dari thumbnail <img> "Lampiran Foto" di DOM Dashboard
   function extractPhotoUrlsFromDom(eventData) {
     if (eventData && Array.isArray(eventData.photoUrls) && eventData.photoUrls.length > 0) {
       return eventData.photoUrls;
@@ -2852,7 +3153,6 @@ if (isExtensionContextAlive()) {
     return domPhotos;
   }
 
-  // Bersihkan langsung localStorage "metus_saved_groups" di situs GitHub Pages agar entri lama "Grup FB <id>" tergantikan
   function syncToLocalStorageAndPostMessage(userId, groups) {
     if (!Array.isArray(groups) || groups.length === 0) return;
 
@@ -2895,39 +3195,75 @@ if (isExtensionContextAlive()) {
         type: "METUS_EXTENSION_SYNC",
         userId: userId,
         groups: groups,
-        bridgeVersion: "1.1.6",
-      }, "*");
+        bridgeVersion: "1.2.0",
+      }, window.location.origin);
     }, delay);
   }
 
-  // Ambil sesi & grup tersimpan dari background
-  try {
-    chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
-      if (chrome.runtime.lastError) return;
-      if (data && data.groups && data.groups.length > 0) {
-        syncToLocalStorageAndPostMessage(data.userId, data.groups);
-      }
-    });
-  } catch (e) {}
-
-  // Terima live update dari background saat nama grup selesai di-resolve bertahap
-  try {
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg && msg.action === "LIVE_GROUPS_UPDATED" && Array.isArray(msg.groups)) {
-        syncToLocalStorageAndPostMessage(msg.userId, msg.groups);
-      }
-    });
-  } catch (e) {}
+  // Ambil sesi & grup tersimpan dari background pada inisialisasi pertama
+  if (isFirstBridgeLoadInTab) {
+    try {
+      chrome.runtime.sendMessage({ action: "GET_SAVED_GROUPS" }, (data) => {
+        if (chrome.runtime.lastError) return;
+        if (data && data.groups && data.groups.length > 0) {
+          syncToLocalStorageAndPostMessage(data.userId, data.groups);
+        }
+      });
+    } catch (e) {}
+  }
 
   const dispatchedResultIds = new Set();
+  const completedResultIds = new Set();
+
+  function emitPostCompletedOnce(payload) {
+    if (!payload) return;
+    const rId = payload.resultId || "";
+    if (rId && completedResultIds.has(rId)) {
+      return;
+    }
+    if (rId) {
+      completedResultIds.add(rId);
+      setTimeout(() => {
+        completedResultIds.delete(rId);
+      }, 60000);
+    }
+    window.postMessage({
+      type: "METUS_POST_COMPLETED",
+      groupId: payload.groupId,
+      resultId: rId,
+      success: !!payload.success,
+      error: payload.error,
+      message: payload.message,
+      postUrl: payload.postUrl || ("https://www.facebook.com/groups/" + payload.groupId),
+    }, window.location.origin);
+  }
+
+  // Terima live update grup DAN hasil posting langsung (DIRECT_POST_RESULT) dari background
+  try {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (!msg) return;
+      if (msg.action === "LIVE_GROUPS_UPDATED" && Array.isArray(msg.groups)) {
+        syncToLocalStorageAndPostMessage(msg.userId, msg.groups);
+      } else if (msg.action === "DIRECT_POST_RESULT") {
+        emitPostCompletedOnce(msg);
+      }
+    });
+  } catch (e) {}
 
   function handleWindowMessage(event) {
-    if (!event.data) return;
+    if (event.source !== window || !event.data) return;
 
-    // PENTING: Jika content script ini sudah yatim (karena ekstensi baru saja di-reload di chrome://extensions),
-    // lepaskan listener dan JANGAN PERNAH mengunci atribut DOM!
     if (!isExtensionContextAlive()) {
       window.removeEventListener("message", handleWindowMessage);
+      return;
+    }
+
+    if (event.data.type === "METUS_ABORT_QUEUE") {
+      try {
+        chrome.runtime.sendMessage({ action: "ABORT_POST_QUEUE" }, () => {
+          void chrome.runtime.lastError;
+        });
+      } catch (e) {}
       return;
     }
 
@@ -2951,7 +3287,6 @@ if (isExtensionContextAlive()) {
       const grpId = event.data.groupId || "";
       const domResultLockAttr = "data-metus-lock-res-" + rId;
 
-      // Hanya cegah jika resultId yang sama persis dikirim ganda dalam < 2.5 detik
       const prevLockTs = Number(document.documentElement.getAttribute(domResultLockAttr) || "0");
       if (rId && (dispatchedResultIds.has(rId) || (prevLockTs > 0 && Date.now() - prevLockTs < 2500))) {
         return;
@@ -2960,6 +3295,10 @@ if (isExtensionContextAlive()) {
       if (rId) {
         dispatchedResultIds.add(rId);
         document.documentElement.setAttribute(domResultLockAttr, String(Date.now()));
+        setTimeout(() => {
+          dispatchedResultIds.delete(rId);
+          document.documentElement.removeAttribute(domResultLockAttr);
+        }, 60000);
       }
 
       const isAnonymousPost = detectAnonymousModeFromDom(event.data);
@@ -2977,44 +3316,48 @@ if (isExtensionContextAlive()) {
         }, (res) => {
           const runtimeErr = chrome.runtime.lastError;
           if (runtimeErr && !res) {
-            window.postMessage({
-              type: "METUS_POST_COMPLETED",
-              groupId: grpId,
-              resultId: rId,
-              success: false,
-              error: "Koneksi ekstensi terputus sementara (" + (runtimeErr.message || "Reload") + "). Silakan refresh (F5) halaman ini lalu coba kembali.",
-              postUrl: "https://www.facebook.com/groups/" + grpId,
-            }, "*");
+            // Jangan langsung gagalkan jika hasil sudah dikirim lewat DIRECT_POST_RESULT atau sedang berjalan;
+            // hanya gagalkan jika konteks ekstensi memang mati/invalidated.
+            if (!isExtensionContextAlive()) {
+              emitPostCompletedOnce({
+                groupId: grpId,
+                resultId: rId,
+                success: false,
+                error: "Ekstensi baru saja di-reload. Silakan refresh (F5) halaman dashboard ini sekali lalu coba kembali.",
+                postUrl: "https://www.facebook.com/groups/" + grpId,
+              });
+            }
             return;
           }
 
-          window.postMessage({
-            type: "METUS_POST_COMPLETED",
-            groupId: grpId,
-            resultId: rId,
-            success: !!(res && res.success),
-            error: res?.error,
-            message: res?.message,
-            postUrl: res?.postUrl || ("https://www.facebook.com/groups/" + grpId),
-          }, "*");
+          if (res) {
+            emitPostCompletedOnce({
+              groupId: grpId,
+              resultId: rId,
+              success: !!res.success,
+              error: res.error,
+              message: res.message,
+              postUrl: res.postUrl || ("https://www.facebook.com/groups/" + grpId),
+            });
+          }
         });
       } catch (sendErr) {
         if (rId) {
           dispatchedResultIds.delete(rId);
           document.documentElement.removeAttribute(domResultLockAttr);
         }
-        window.postMessage({
-          type: "METUS_POST_COMPLETED",
+        emitPostCompletedOnce({
           groupId: grpId,
           resultId: rId,
           success: false,
           error: "Ekstensi baru saja diperbarui. Silakan refresh (F5) halaman dashboard ini sekali lalu klik Jalankan kembali.",
           postUrl: "https://www.facebook.com/groups/" + grpId,
-        }, "*");
+        });
       }
     }
   }
 
+  window.__metus_prev_window_msg_handler = handleWindowMessage;
   window.addEventListener("message", handleWindowMessage);
 }
 `,

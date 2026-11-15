@@ -57,6 +57,7 @@ interface ContentComposerProps {
   isPosting: boolean;
   onStartPosting: () => void;
   onStopPosting: () => void;
+  onRetryFailedGroups?: () => void;
   results: PostResultItem[];
   onPreviewPostResult: (item: PostResultItem) => void;
   logs: LogEntry[];
@@ -84,6 +85,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
   isPosting,
   onStartPosting,
   onStopPosting,
+  onRetryFailedGroups,
   results,
   onPreviewPostResult,
   logs,
@@ -104,21 +106,56 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
 
   const photoInputRef = React.useRef<HTMLInputElement>(null);
 
+  const compressImageFileToDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onerror = () => resolve('');
+      reader.onload = () => {
+        const rawDataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (!rawDataUrl || file.type === 'image/gif') {
+          resolve(rawDataUrl);
+          return;
+        }
+        const img = new Image();
+        img.onerror = () => resolve(rawDataUrl);
+        img.onload = () => {
+          try {
+            const maxDim = 1600;
+            let { width, height } = img;
+            if (width > maxDim || height > maxDim) {
+              if (width >= height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(rawDataUrl);
+              return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressed = canvas.toDataURL('image/jpeg', 0.82);
+            resolve(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+          } catch {
+            resolve(rawDataUrl);
+          }
+        };
+        img.src = rawDataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+
   const processUploadedFiles = (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter((file) => file.type.startsWith('image/'));
     if (fileArray.length === 0) return;
 
-    Promise.all(
-      fileArray.map(
-        (file) =>
-          new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
-            reader.onerror = () => resolve('');
-            reader.readAsDataURL(file);
-          })
-      )
-    ).then((dataUrls) => {
+    Promise.all(fileArray.map((file) => compressImageFileToDataUrl(file))).then((dataUrls) => {
       const validUrls = dataUrls.filter(Boolean);
       if (validUrls.length > 0) {
         onUpdateScenario({
@@ -440,7 +477,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                   <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
                       <strong>Penting agar Komposer, Format Baris & Multi-Foto Presisi:</strong> Pastikan Ekstensi Chrome Anda menggunakan{' '}
-                      <span className="font-mono font-bold">v1.1.8</span> lalu di-reload di{' '}
+                      <span className="font-mono font-bold">v1.2.0</span> lalu di-reload di{' '}
                       <span className="font-mono">chrome://extensions</span>.
                     </div>
                     <button
@@ -449,7 +486,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
                       className="shrink-0 px-2.5 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
                     >
                       <Download className="w-3.5 h-3.5" />
-                      <span>Unduh Ekstensi v1.1.8</span>
+                      <span>Unduh Ekstensi v1.2.0</span>
                     </button>
                   </div>
                 )}
@@ -1193,7 +1230,7 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
             </span>
           </div>
           {results.length > 0 && (
-            <div className="flex items-center gap-2 text-xs">
+            <div className="flex items-center gap-2 text-xs flex-wrap">
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
                 ✓ {results.filter((r) => r.status === 'success').length} sukses
               </span>
@@ -1201,6 +1238,21 @@ export const ContentComposer: React.FC<ContentComposerProps> = ({
               <span className="text-rose-600 dark:text-rose-400 font-semibold">
                 ✗ {results.filter((r) => r.status === 'failed').length} gagal
               </span>
+              {!isPosting &&
+                onRetryFailedGroups &&
+                results.some((r) => r.status === 'failed') && (
+                  <button
+                    type="button"
+                    onClick={onRetryFailedGroups}
+                    className="ml-1 px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-600 text-rose-600 hover:text-white dark:bg-rose-950/60 dark:hover:bg-rose-600 dark:text-rose-300 border border-rose-200 dark:border-rose-800/80 text-[11px] font-bold transition-all inline-flex items-center gap-1 cursor-pointer shadow-2xs"
+                    title="Ulangi pengiriman khusus untuk grup yang gagal"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>
+                      Ulangi Gagal ({results.filter((r) => r.status === 'failed').length})
+                    </span>
+                  </button>
+                )}
             </div>
           )}
         </div>

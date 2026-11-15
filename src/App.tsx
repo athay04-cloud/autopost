@@ -29,6 +29,12 @@ import {
   DEFAULT_SCENARIOS,
 } from './data/mockData';
 import { resolvePostContent } from './utils/spintax';
+import {
+  isPlaceholderGroupName,
+  cleanGroupDisplayName,
+  computeGroupInitials,
+  normalizeSavedGroupList,
+} from './utils/groupNormalizer';
 
 export default function App() {
   // Theme state
@@ -66,6 +72,10 @@ export default function App() {
   const [showLandingPage, setShowLandingPage] = React.useState<boolean>(() => {
     const hash = window.location.hash.toLowerCase();
     if (hash.includes('sync_success=')) {
+      sessionStorage.setItem('metus_entered_dashboard', 'true');
+      return false;
+    }
+    if (sessionStorage.getItem('metus_entered_dashboard') === 'true') {
       return false;
     }
     return true;
@@ -73,72 +83,6 @@ export default function App() {
   const [currentUser, setCurrentUser] = React.useState<AuthUser | null>(() => {
     return getSavedAuthSession().user;
   });
-
-  // Helper: Cek apakah nama grup masih berupa placeholder "Grup FB <id>"
-  const isPlaceholderGroupName = React.useCallback((name: string | undefined, id: string): boolean => {
-    if (!name) return true;
-    const t = name.trim();
-    if (!t || t.length < 2) return true;
-    if (t.toLowerCase() === id.toLowerCase()) return true;
-    if (/^grup\s+(fb|facebook|komunitas\s+fb)\b/i.test(t)) return true;
-    return false;
-  }, []);
-
-  // Helper: Ubah slug atau nama placeholder menjadi nama grup yang rapi & mudah dibaca
-  const cleanGroupDisplayName = React.useCallback(
-    (rawName: string | undefined, id: string, fallbackRealName?: string): string => {
-      if (fallbackRealName && !isPlaceholderGroupName(fallbackRealName, id)) {
-        return fallbackRealName.trim();
-      }
-      if (rawName && !isPlaceholderGroupName(rawName, id)) {
-        return rawName.trim();
-      }
-
-      const cleanId = String(id || '').trim();
-      // Jika ID berupa angka murni dan belum ada nama asli
-      if (/^\d+$/.test(cleanId)) {
-        return `Grup Komunitas FB #${cleanId}`;
-      }
-
-      // Jika ID berupa slug teks (contoh: metacryptoasia atau ethtrade.global.indonesia)
-      const spacedSlug = cleanId
-        .replace(/[._-]+/g, ' ')
-        .replace(/([a-z])([A-Z])/g, '$1 $2')
-        .replace(
-          /(meta|crypto|asia|global|indonesia|nusantara|info|kos|kontrakan|jual|beli|loker|lowongan|kerja|komunitas|forum|bisnis|usaha|umkm|properti|rumah|tanah|mobil|motor|otomotif|jakarta|bandung|surabaya|medan|semarang|jogja|yogyakarta|solo|malang|bali|makassar|palembang|bekasi|depok|tangerang|bogor|freelance|digital|marketing|trading|forex|saham|investasi|kuliner|wisata|travel|gamer|gaming|anime| teknologi|programmer|developer|desain)/gi,
-          ' $1 '
-        )
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      if (!spacedSlug) {
-        return `Grup FB ${cleanId}`;
-      }
-
-      return spacedSlug
-        .split(' ')
-        .filter(Boolean)
-        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-        .join(' ');
-    },
-    [isPlaceholderGroupName]
-  );
-
-  // Helper: Buat inisial avatar 2 huruf dari nama asli grup (bukan "GR" dari "Grup FB")
-  const computeGroupInitials = React.useCallback((displayName: string, id: string): string => {
-    const stripped = displayName
-      .replace(/^grup\s+(komunitas\s+)?(fb|facebook)\s*#?/i, '')
-      .replace(/[^a-zA-Z0-9\s]/g, ' ')
-      .trim();
-    const words = stripped.split(/\s+/).filter(Boolean);
-    if (words.length >= 2) {
-      return (words[0][0] + words[1][0]).toUpperCase();
-    }
-    if (words.length === 1 && words[0].length >= 2) {
-      return words[0].slice(0, 2).toUpperCase();
-    }
-    return String(id || 'FB').slice(0, 2).toUpperCase();
-  }, []);
 
   // Stealth Secret Admin Triggers & Extension #sync_success=<count> Hash Trigger
   React.useEffect(() => {
@@ -149,8 +93,9 @@ export default function App() {
         setIsSecretAdminOpen(true);
       }
       if (hash.includes('sync_success=')) {
+        sessionStorage.setItem('metus_entered_dashboard', 'true');
         setShowLandingPage(false);
-        window.postMessage({ type: 'METUS_REQUEST_SYNC' }, '*');
+        window.postMessage({ type: 'METUS_REQUEST_SYNC' }, window.location.origin);
       }
     };
     checkUrlTrigger();
@@ -177,55 +122,12 @@ export default function App() {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const cleaned = parsed.map((g: any, idx: number) => {
-            const idStr = String(g.id || '');
-            const rawName = String(g.name || '');
-            // Bersihkan jika nama masih "Grup FB <slug>"
-            const isPlace =
-              !rawName ||
-              rawName.toLowerCase() === idStr.toLowerCase() ||
-              /^grup\s+(fb|facebook|komunitas\s+fb)\b/i.test(rawName);
-            let finalName = rawName;
-            if (isPlace) {
-              if (/^\d+$/.test(idStr)) {
-                finalName = `Grup Komunitas FB #${idStr}`;
-              } else {
-                finalName = idStr
-                  .replace(/[._-]+/g, ' ')
-                  .replace(/([a-z])([A-Z])/g, '$1 $2')
-                  .replace(
-                    /(meta|crypto|asia|global|indonesia|nusantara|info|kos|kontrakan|jual|beli|loker|lowongan|kerja|komunitas|forum|bisnis|usaha|umkm|properti|rumah|tanah|mobil|motor|otomotif|jakarta|bandung|surabaya|medan|semarang|jogja|yogyakarta|solo|malang|bali|makassar|palembang|bekasi|depok|tangerang|bogor|freelance|digital|marketing|trading|forex|saham|investasi|kuliner|wisata|travel|gamer|gaming|anime|teknologi|programmer|developer|desain)/gi,
-                    ' $1 '
-                  )
-                  .replace(/\s+/g, ' ')
-                  .trim()
-                  .split(' ')
-                  .filter(Boolean)
-                  .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-                  .join(' ');
-              }
-            }
-            const stripped = finalName
-              .replace(/^grup\s+(komunitas\s+)?(fb|facebook)\s*#?/i, '')
-              .replace(/[^a-zA-Z0-9\s]/g, ' ')
-              .trim();
-            const words = stripped.split(/\s+/).filter(Boolean);
-            const avatarText =
-              words.length >= 2
-                ? (words[0][0] + words[1][0]).toUpperCase()
-                : words.length === 1 && words[0].length >= 2
-                ? words[0].slice(0, 2).toUpperCase()
-                : idStr.slice(0, 2).toUpperCase();
-
-            return {
-              ...g,
-              id: idStr,
-              name: finalName || rawName,
-              avatarText,
-              avatarBg: g.avatarBg || (idx % 2 === 0 ? 'bg-blue-600' : 'bg-emerald-600'),
-            };
-          });
-          localStorage.setItem('metus_saved_groups', JSON.stringify(cleaned));
+          const cleaned = normalizeSavedGroupList(parsed);
+          try {
+            localStorage.setItem('metus_saved_groups', JSON.stringify(cleaned));
+          } catch {
+            // ignore storage quota
+          }
           return cleaned;
         }
       } catch {
@@ -267,14 +169,22 @@ export default function App() {
   // Map to await real extension posting results
   const pendingPostResolvers = React.useRef<Map<string, (res: any) => void>>(new Map());
   const lastSyncTimeRef = React.useRef<number>(0);
+  const lastSyncedCountRef = React.useRef<number>(0);
 
   // Listener sinkronisasi otomatis dari Extension Chrome (dashboard_bridge.js)
   React.useEffect(() => {
     const handleExtensionSync = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'METUS_EXTENSION_SYNC') {
+      if (event.source !== window || !event.data) return;
+      if (event.data.type === 'METUS_EXTENSION_SYNC') {
         const now = Date.now();
-        const shouldLogSync = now - lastSyncTimeRef.current >= 2500;
+        const incomingCount = Array.isArray(event.data.groups) ? event.data.groups.length : 0;
+        const shouldLogSync =
+          !isPostingRef.current &&
+          (lastSyncedCountRef.current !== incomingCount || now - lastSyncTimeRef.current >= 60000);
         lastSyncTimeRef.current = now;
+        if (incomingCount > 0) {
+          lastSyncedCountRef.current = incomingCount;
+        }
 
         const { userId, groups: syncedGroups } = event.data;
         if (userId) {
@@ -372,7 +282,7 @@ export default function App() {
 
     // Request sync from bridge if already loaded
     setTimeout(() => {
-      window.postMessage({ type: 'METUS_REQUEST_SYNC' }, '*');
+      window.postMessage({ type: 'METUS_REQUEST_SYNC' }, window.location.origin);
     }, 1000);
 
     return () => window.removeEventListener('message', handleExtensionSync);
@@ -392,7 +302,19 @@ export default function App() {
   });
 
   React.useEffect(() => {
-    localStorage.setItem('metus_scenarios', JSON.stringify(scenarios));
+    try {
+      localStorage.setItem('metus_scenarios', JSON.stringify(scenarios));
+    } catch {
+      try {
+        const lightweightScenarios = scenarios.map((s) => ({
+          ...s,
+          photoUrls: (s.photoUrls || []).slice(0, 2),
+        }));
+        localStorage.setItem('metus_scenarios', JSON.stringify(lightweightScenarios));
+      } catch {
+        // Abaikan jika kuota localStorage penuh; state di RAM tetap terjaga
+      }
+    }
   }, [scenarios]);
 
   const [activeScenarioId, setActiveScenarioId] = React.useState<string>(scenarios[0]?.id || 'scen_1');
@@ -541,13 +463,7 @@ export default function App() {
   };
 
   const handleUpdateScenario = (updated: PostScenario) => {
-    setScenarios((prev) =>
-      prev.map((s) =>
-        s.id === updated.id
-          ? updated
-          : { ...s, isAnonymous: updated.isAnonymous }
-      )
-    );
+    setScenarios((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
   };
 
   // Import / Export Handlers
@@ -616,12 +532,17 @@ export default function App() {
     addLog('warn', 'Koneksi akun Chrome diputuskan. Kembali ke database simulasi.');
   };
 
-  // Posting Runner with Threading, Delay Randomizer & Anti-Double-Post Mutex
-  const handleStartPosting = async () => {
+  // Posting Runner with Schedule, Cycle Loop, Single-Thread Extension Lock, Delay Randomizer & Anti-Double-Post Mutex
+  const runPostingBatch = async (overrideGroupIds?: string[]) => {
     if (isPostingRef.current) {
       return;
     }
-    if (selectedGroupIds.length === 0) {
+    const activeTargetIds =
+      Array.isArray(overrideGroupIds) && overrideGroupIds.length > 0
+        ? overrideGroupIds
+        : selectedGroupIds;
+
+    if (activeTargetIds.length === 0) {
       addLog('warn', 'Tidak ada grup target yang dipilih! Pilih minimal 1 grup.');
       return;
     }
@@ -630,242 +551,313 @@ export default function App() {
     setIsPosting(true);
     abortControllerRef.current = false;
 
+    // 1. Dukungan Jadwal Posting (Schedule Mode) jika diaktifkan pengguna
+    if (executionParams.scheduleEnabled && executionParams.scheduleDateTime) {
+      const targetTimeMs = new Date(executionParams.scheduleDateTime).getTime();
+      if (!Number.isNaN(targetTimeMs) && targetTimeMs > Date.now()) {
+        const waitSecTotal = Math.ceil((targetTimeMs - Date.now()) / 1000);
+        addLog(
+          'info',
+          `[Scheduler Aktif] Menunggu waktu tayang terjadwal (${new Date(targetTimeMs).toLocaleString('id-ID')}) — mulai dalam ${waitSecTotal} detik...`
+        );
+        for (let rem = waitSecTotal; rem > 0; rem--) {
+          if (abortControllerRef.current) break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        if (abortControllerRef.current) {
+          isPostingRef.current = false;
+          setIsPosting(false);
+          addLog('warn', 'Jadwal posting dibatalkan oleh pengguna.');
+          return;
+        }
+      }
+    }
+
     // Filter & deduplicate target group objects by ID so a group is never queued twice
     const seenGroupIds = new Set<string>();
     const targetGroups = groups.filter((g) => {
-      if (!selectedGroupIds.includes(g.id)) return false;
+      if (!activeTargetIds.includes(g.id)) return false;
       if (seenGroupIds.has(g.id)) return false;
       seenGroupIds.add(g.id);
       return true;
     });
 
+    // PENTING: Ketika terhubung ke Ekstensi Chrome nyata, kunci ke 1 thread sekuensial agar tidak terjadi
+    // penumpukan antrean (queue pile-up) dan false-timeout 120 detik di Service Worker Chrome!
+    const effectiveThreadCount = isFbConnected ? 1 : Math.max(1, executionParams.threadCount);
+    const totalCycles = executionParams.advancedCycle ? Math.max(1, executionParams.cycleCount) : 1;
+
     addLog(
       'info',
-      `Memulai otomasi: ${targetGroups.length} grup target unik, ${executionParams.threadCount} threads simultan, jeda acak ${executionParams.delayMinSeconds}-${executionParams.delayMaxSeconds}s.`
+      `Memulai otomasi: ${targetGroups.length} grup target unik, ${effectiveThreadCount} thread${
+        isFbConnected && executionParams.threadCount > 1 ? ' (dikunci 1 thread sekuensial untuk stabilitas Ekstensi Chrome)' : ''
+      }, jeda acak ${executionParams.delayMinSeconds}-${executionParams.delayMaxSeconds}s${
+        totalCycles > 1 ? `, ${totalCycles} siklus berulang` : ''
+      }.`
     );
 
-    // Initialize queued results
-    const batchTimestamp = Date.now();
-    const initialResults: PostResultItem[] = targetGroups.map((group, idx) => ({
-      id: `post_res_${group.id}_${batchTimestamp}_${idx}`,
-      groupId: group.id,
-      groupName: group.name,
-      identityName: activeIdentity.name,
-      scenarioTitle: '',
-      renderedContent: '',
-      bgGradientId: null,
-      attachmentType: 'none',
-      status: 'queued',
-      threadId: (idx % executionParams.threadCount) + 1,
-      timestamp: '',
-    }));
+    for (let cycleIdx = 1; cycleIdx <= totalCycles; cycleIdx++) {
+      if (abortControllerRef.current) break;
 
-    setResults(initialResults);
+      if (totalCycles > 1) {
+        addLog('info', `Memulai Siklus Kampanye #${cycleIdx} dari ${totalCycles}...`);
+      }
 
-    // Queue of index positions
-    const queue = targetGroups.map((group, idx) => ({
-      group,
-      resultId: initialResults[idx].id,
-      index: idx,
-    }));
+      // Initialize queued results for current cycle
+      const batchTimestamp = Date.now();
+      const initialResults: PostResultItem[] = targetGroups.map((group, idx) => ({
+        id: `post_res_${group.id}_${batchTimestamp}_${idx}`,
+        groupId: group.id,
+        groupName: group.name,
+        identityName: activeIdentity.name,
+        scenarioTitle: '',
+        renderedContent: '',
+        bgGradientId: null,
+        attachmentType: 'none',
+        status: 'queued',
+        threadId: (idx % effectiveThreadCount) + 1,
+        timestamp: '',
+      }));
 
-    // Worker thread function
-    const runWorker = async (workerId: number) => {
-      while (queue.length > 0) {
-        if (abortControllerRef.current) break;
+      setResults(initialResults);
 
-        const currentTask = queue.shift();
-        if (!currentTask) break;
+      const queue = targetGroups.map((group, idx) => ({
+        group,
+        resultId: initialResults[idx].id,
+        index: idx,
+      }));
 
-        const { group, resultId, index } = currentTask;
-
-        // Determine scenario to use
-        let scenToUse = scenarios[0];
-        if (executionParams.scenarioMode === 'sequential') {
-          scenToUse = scenarios[index % scenarios.length];
-        } else {
-          scenToUse = scenarios[Math.floor(Math.random() * scenarios.length)];
-        }
-
-        // Render Spintax and dynamic variables
-        const rendered = resolvePostContent(scenToUse.content);
-        const resolvedFirstComment = executionParams.commentAfterPosting
-          ? resolvePostContent(executionParams.firstCommentText || scenToUse.firstCommentText)
-          : '';
-
-        // Calculate random delay
-        const minDelay = executionParams.delayMinSeconds;
-        const maxDelay = executionParams.delayMaxSeconds;
-        const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
-
-        // Check if anonymous mode was requested but group doesn't allow it
-        const isAnonymous = scenToUse.isAnonymous && group.allowAnonymous;
-        const failedAnonymous = scenToUse.isAnonymous && !group.allowAnonymous;
-
-        // Set status to running with countdown
-        setResults((prev) =>
-          prev.map((r) =>
-            r.id === resultId
-              ? {
-                  ...r,
-                  scenarioTitle: scenToUse.title,
-                  renderedContent: rendered,
-                  bgGradientId: scenToUse.bgGradientId,
-                  attachmentType: scenToUse.attachmentType,
-                  attachmentMeta: {
-                    linkUrl: scenToUse.linkUrl,
-                    linkTitle: scenToUse.linkPreview?.title,
-                    photoCount: scenToUse.photoUrls?.length,
-                    photoUrls: scenToUse.photoUrls || [],
-                    videoUrl: scenToUse.videoUrl,
-                  },
-                  firstCommentApplied: resolvedFirstComment,
-                  status: 'running',
-                  delayRemaining: randomDelay,
-                  anonymous: isAnonymous,
-                }
-              : r
-          )
-        );
-
-        addLog(
-          'info',
-          `[Thread #${workerId}] Menyiapkan kiriman ke "${group.name}". Menunggu jeda anti-spam ${randomDelay}s...`
-        );
-
-        // Countdown timer simulation
-        for (let s = randomDelay; s > 0; s--) {
+      const runWorker = async (workerId: number) => {
+        while (queue.length > 0) {
           if (abortControllerRef.current) break;
-          await new Promise((res) => setTimeout(res, 1000));
-          setResults((prev) =>
-            prev.map((r) =>
-              r.id === resultId ? { ...r, delayRemaining: s - 1 } : r
-            )
-          );
-        }
 
-        if (abortControllerRef.current) {
-          setResults((prev) =>
-            prev.map((r) => (r.id === resultId ? { ...r, status: 'failed', errorMessage: 'Dibatalkan oleh pengguna' } : r))
-          );
-          break;
-        }
+          const currentTask = queue.shift();
+          if (!currentTask) break;
 
-        // Determine success or edge-case failure
-        if (failedAnonymous) {
+          const { group, resultId, index } = currentTask;
+
+          let scenToUse = scenarios[0];
+          if (executionParams.scenarioMode === 'sequential') {
+            scenToUse = scenarios[index % scenarios.length];
+          } else {
+            scenToUse = scenarios[Math.floor(Math.random() * scenarios.length)];
+          }
+
+          const rendered = resolvePostContent(scenToUse.content);
+          const resolvedFirstComment = executionParams.commentAfterPosting
+            ? resolvePostContent(executionParams.firstCommentText || scenToUse.firstCommentText)
+            : '';
+
+          const minDelay = executionParams.delayMinSeconds;
+          const maxDelay = executionParams.delayMaxSeconds;
+          const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+
+          const isAnonymous = scenToUse.isAnonymous && group.allowAnonymous;
+          const failedAnonymous = scenToUse.isAnonymous && !group.allowAnonymous;
+
           setResults((prev) =>
             prev.map((r) =>
               r.id === resultId
                 ? {
                     ...r,
-                    status: 'failed',
-                    errorMessage: 'Grup tidak mengizinkan posting anonim.',
-                    timestamp: new Date().toLocaleTimeString(),
+                    scenarioTitle: scenToUse.title,
+                    renderedContent: rendered,
+                    bgGradientId: scenToUse.bgGradientId,
+                    attachmentType: scenToUse.attachmentType,
+                    attachmentMeta: {
+                      linkUrl: scenToUse.linkUrl,
+                      linkTitle: scenToUse.linkPreview?.title,
+                      photoCount: scenToUse.photoUrls?.length,
+                      photoUrls: scenToUse.photoUrls || [],
+                      videoUrl: scenToUse.videoUrl,
+                    },
+                    firstCommentApplied: resolvedFirstComment,
+                    status: 'running',
+                    delayRemaining: randomDelay,
+                    anonymous: isAnonymous,
                   }
                 : r
             )
           );
-          addLog('error', `[Thread #${workerId}] Gagal kirim ke "${group.name}": Grup melarang postingan anonim.`);
-        } else {
-          const realGroupUrl = `https://www.facebook.com/groups/${group.id}?sorting_setting=CHRONOLOGICAL`;
 
-          if (isFbConnected) {
-            addLog(
-              'info',
-              `[Thread #${workerId}] Mengirim perintah posting otomatis ke ekstensi Chrome untuk "${group.name}"...`
+          addLog(
+            'info',
+            `[Thread #${workerId}] Menyiapkan kiriman ke "${group.name}". Menunggu jeda anti-spam ${randomDelay}s...`
+          );
+
+          for (let s = randomDelay; s > 0; s--) {
+            if (abortControllerRef.current) break;
+            await new Promise((res) => setTimeout(res, 1000));
+            setResults((prev) =>
+              prev.map((r) => (r.id === resultId ? { ...r, delayRemaining: s - 1 } : r))
             );
+          }
 
-            // Await extension completion via promise with 40s timeout
-            const extensionResultPromise = new Promise<{
-              success: boolean;
-              error?: string;
-              message?: string;
-              postUrl?: string;
-            }>((resolve) => {
-              const timeout = setTimeout(() => {
-                pendingPostResolvers.current.delete(resultId);
-                resolve({
-                  success: false,
-                  error: 'Timeout: Ekstensi membutuhkan waktu lebih dari 120 detik. Pastikan tab Facebook dapat memuat halaman.',
+          if (abortControllerRef.current) {
+            setResults((prev) =>
+              prev.map((r) =>
+                r.id === resultId
+                  ? { ...r, status: 'failed', errorMessage: 'Dibatalkan oleh pengguna' }
+                  : r
+              )
+            );
+            break;
+          }
+
+          if (failedAnonymous) {
+            setResults((prev) =>
+              prev.map((r) =>
+                r.id === resultId
+                  ? {
+                      ...r,
+                      status: 'failed',
+                      errorMessage: 'Grup tidak mengizinkan posting anonim.',
+                      timestamp: new Date().toLocaleTimeString(),
+                    }
+                  : r
+              )
+            );
+            addLog(
+              'error',
+              `[Thread #${workerId}] Gagal kirim ke "${group.name}": Grup melarang postingan anonim.`
+            );
+          } else {
+            const realGroupUrl = `https://www.facebook.com/groups/${group.id}?sorting_setting=CHRONOLOGICAL`;
+
+            if (isFbConnected) {
+              addLog(
+                'info',
+                `[Thread #${workerId}] Mengirim perintah posting otomatis ke ekstensi Chrome untuk "${group.name}"...`
+              );
+
+              const extensionResultPromise = new Promise<{
+                success: boolean;
+                error?: string;
+                message?: string;
+                postUrl?: string;
+              }>((resolve) => {
+                const timeout = setTimeout(() => {
+                  pendingPostResolvers.current.delete(resultId);
+                  resolve({
+                    success: false,
+                    error:
+                      'Timeout: Ekstensi membutuhkan waktu lebih dari 120 detik. Pastikan tab Facebook dapat memuat halaman.',
+                  });
+                }, 120000);
+
+                pendingPostResolvers.current.set(resultId, (res) => {
+                  clearTimeout(timeout);
+                  resolve(res);
                 });
-              }, 120000);
 
-              pendingPostResolvers.current.set(resultId, (res) => {
-                clearTimeout(timeout);
-                resolve(res);
+                if (dispatchedPostIdsRef.current.has(resultId)) {
+                  return;
+                }
+                dispatchedPostIdsRef.current.add(resultId);
+                setTimeout(() => {
+                  dispatchedPostIdsRef.current.delete(resultId);
+                }, 60000);
+
+                try {
+                  const bridgeVer =
+                    document.documentElement.getAttribute('data-metus-bridge-version') || '';
+                  const extVer =
+                    document.documentElement.getAttribute('data-metus-ext-version') || bridgeVer;
+                  const isModernBridge = bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
+                  if (
+                    isAnonymous &&
+                    !['1.2.0', '1.1.9', '1.1.8', '1.1.7', '1.1.6', '1.1.5', '1.1.4', '1.1.3', '1.1.2'].includes(
+                      extVer
+                    )
+                  ) {
+                    addLog(
+                      'warn',
+                      `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${
+                        extVer || 'lama'
+                      }). Unduh & pasang ZIP Ekstensi v1.2.0 agar tombol Postingan Anonim Facebook diklik otomatis!`
+                    );
+                  }
+                  window.postMessage(
+                    {
+                      type: isModernBridge ? 'METUS_DISPATCH_POST_V2' : 'METUS_DISPATCH_POST',
+                      groupId: group.id,
+                      content: rendered,
+                      firstComment: resolvedFirstComment,
+                      photoUrls: scenToUse.photoUrls || [],
+                      isAnonymous: isAnonymous,
+                      resultId: resultId,
+                    },
+                    window.location.origin
+                  );
+                } catch (err) {
+                  clearTimeout(timeout);
+                  resolve({ success: false, error: 'Gagal dispatch postMessage: ' + String(err) });
+                }
               });
 
-              if (dispatchedPostIdsRef.current.has(resultId)) {
-                return;
-              }
-              dispatchedPostIdsRef.current.add(resultId);
+              const postResult = await extensionResultPromise;
 
-              try {
-                const bridgeVer =
-                  document.documentElement.getAttribute('data-metus-bridge-version') || '';
-                const extVer =
-                  document.documentElement.getAttribute('data-metus-ext-version') || bridgeVer;
-                const isModernBridge =
-                  bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
-                if (isAnonymous && !['1.1.8', '1.1.7', '1.1.6', '1.1.5', '1.1.4', '1.1.3', '1.1.2'].includes(extVer)) {
+              if (postResult.success) {
+                setResults((prev) =>
+                  prev.map((r) =>
+                    r.id === resultId
+                      ? {
+                          ...r,
+                          status: 'success',
+                          postUrl: postResult.postUrl || realGroupUrl,
+                          isRealPost: true,
+                          timestamp: new Date().toLocaleTimeString(),
+                        }
+                      : r
+                  )
+                );
+                addLog(
+                  'success',
+                  `[Thread #${workerId} · Ekstensi Terverifikasi] Postingan berhasil diterbitkan ke "${
+                    group.name
+                  }"! Link grup: ${postResult.postUrl || realGroupUrl}`
+                );
+
+                if (executionParams.commentAfterPosting && resolvedFirstComment) {
                   addLog(
-                    'warn',
-                    `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${extVer || 'lama'}). Unduh & pasang ZIP Ekstensi v1.1.8 agar tombol Postingan Anonim Facebook diklik otomatis!`
+                    'info',
+                    `[Thread #${workerId}] Auto-comment (Up) terpasang di "${group.name}": "${resolvedFirstComment.slice(
+                      0,
+                      35
+                    )}..."`
                   );
                 }
-                window.postMessage(
-                  {
-                    type: isModernBridge ? 'METUS_DISPATCH_POST_V2' : 'METUS_DISPATCH_POST',
-                    groupId: group.id,
-                    content: rendered,
-                    firstComment: resolvedFirstComment,
-                    photoUrls: scenToUse.photoUrls || [],
-                    isAnonymous: isAnonymous,
-                    resultId: resultId,
-                  },
-                  '*'
+              } else {
+                setResults((prev) =>
+                  prev.map((r) =>
+                    r.id === resultId
+                      ? {
+                          ...r,
+                          status: 'failed',
+                          errorMessage:
+                            postResult.error || 'Gagal menerbitkan postingan ke Facebook',
+                          postUrl: realGroupUrl,
+                          isRealPost: false,
+                          timestamp: new Date().toLocaleTimeString(),
+                        }
+                      : r
+                  )
                 );
-              } catch (err) {
-                clearTimeout(timeout);
-                resolve({ success: false, error: 'Gagal dispatch postMessage: ' + String(err) });
+                addLog(
+                  'error',
+                  `[Thread #${workerId} · Gagal FB] Grup "${group.name}": ${
+                    postResult.error || 'Ekstensi gagal menerbitkan kiriman.'
+                  }`
+                );
               }
-            });
-
-            const postResult = await extensionResultPromise;
-
-            if (postResult.success) {
+            } else {
+              // Pure simulation mode
               setResults((prev) =>
                 prev.map((r) =>
                   r.id === resultId
                     ? {
                         ...r,
                         status: 'success',
-                        postUrl: postResult.postUrl || realGroupUrl,
-                        isRealPost: true,
-                        timestamp: new Date().toLocaleTimeString(),
-                      }
-                    : r
-                )
-              );
-              addLog(
-                'success',
-                `[Thread #${workerId} · Ekstensi Terverifikasi] Postingan berhasil diterbitkan ke "${group.name}"! Link grup: ${postResult.postUrl || realGroupUrl}`
-              );
-
-              if (executionParams.commentAfterPosting && resolvedFirstComment) {
-                addLog(
-                  'info',
-                  `[Thread #${workerId}] Auto-comment (Up) terpasang di "${group.name}": "${resolvedFirstComment.slice(0, 35)}..."`
-                );
-              }
-            } else {
-              setResults((prev) =>
-                prev.map((r) =>
-                  r.id === resultId
-                    ? {
-                        ...r,
-                        status: 'failed',
-                        errorMessage: postResult.error || 'Gagal menerbitkan postingan ke Facebook',
                         postUrl: realGroupUrl,
                         isRealPost: false,
                         timestamp: new Date().toLocaleTimeString(),
@@ -874,48 +866,43 @@ export default function App() {
                 )
               );
               addLog(
-                'error',
-                `[Thread #${workerId} · Gagal FB] Grup "${group.name}": ${postResult.error || 'Ekstensi gagal menerbitkan kiriman.'}`
+                'success',
+                `[Thread #${workerId} · Simulasi] Berhasil disiapkan untuk "${group.name}". Link grup: ${realGroupUrl}`
               );
-            }
-          } else {
-            // Pure simulation mode
-            setResults((prev) =>
-              prev.map((r) =>
-                r.id === resultId
-                  ? {
-                      ...r,
-                      status: 'success',
-                      postUrl: realGroupUrl,
-                      isRealPost: false,
-                      timestamp: new Date().toLocaleTimeString(),
-                    }
-                  : r
-              )
-            );
-            addLog(
-              'success',
-              `[Thread #${workerId} · Simulasi] Berhasil disiapkan untuk "${group.name}". Link grup: ${realGroupUrl}`
-            );
 
-            if (executionParams.commentAfterPosting && resolvedFirstComment) {
-              addLog(
-                'info',
-                `[Thread #${workerId}] Auto-comment (Up) disimulasikan di "${group.name}": "${resolvedFirstComment.slice(0, 35)}..."`
-              );
+              if (executionParams.commentAfterPosting && resolvedFirstComment) {
+                addLog(
+                  'info',
+                  `[Thread #${workerId}] Auto-comment (Up) disimulasikan di "${group.name}": "${resolvedFirstComment.slice(
+                    0,
+                    35
+                  )}..."`
+                );
+              }
             }
           }
         }
+      };
+
+      const threadPromises: Promise<void>[] = [];
+      for (let i = 1; i <= effectiveThreadCount; i++) {
+        threadPromises.push(runWorker(i));
       }
-    };
 
-    // Run threads concurrently
-    const threadPromises: Promise<void>[] = [];
-    for (let i = 1; i <= executionParams.threadCount; i++) {
-      threadPromises.push(runWorker(i));
+      await Promise.all(threadPromises);
+
+      if (cycleIdx < totalCycles && !abortControllerRef.current) {
+        const cyclePauseSec = Math.max(1, executionParams.delayBetweenCyclesMin || 15) * 60;
+        addLog(
+          'info',
+          `[Siklus #${cycleIdx}/${totalCycles} Selesai] Menunggu jeda antar-siklus selama ${executionParams.delayBetweenCyclesMin} menit (${cyclePauseSec}s)...`
+        );
+        for (let s = cyclePauseSec; s > 0; s--) {
+          if (abortControllerRef.current) break;
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
     }
-
-    await Promise.all(threadPromises);
 
     isPostingRef.current = false;
     setIsPosting(false);
@@ -926,18 +913,52 @@ export default function App() {
     }
   };
 
+  const handleStartPosting = () => {
+    void runPostingBatch();
+  };
+
+  const handleRetryFailedGroups = () => {
+    if (isPostingRef.current) return;
+    const failedGroupIds = Array.from(
+      new Set(results.filter((r) => r.status === 'failed').map((r) => r.groupId))
+    );
+    if (failedGroupIds.length === 0) {
+      addLog('info', 'Tidak ada grup yang gagal untuk diulangi.');
+      return;
+    }
+    setSelectedGroupIds(failedGroupIds);
+    addLog('info', `Mengulangi pengiriman khusus untuk ${failedGroupIds.length} grup yang gagal...`);
+    void runPostingBatch(failedGroupIds);
+  };
+
   const handleStopPosting = () => {
     abortControllerRef.current = true;
     isPostingRef.current = false;
     setIsPosting(false);
-    addLog('warn', 'Menghentikan thread posting...');
+    // Batalkan semua promise yang sedang menunggu respon ekstensi & bersihkan antrean di Service Worker
+    pendingPostResolvers.current.forEach((resolve) => {
+      resolve({
+        success: false,
+        error: 'Dihentikan oleh pengguna (Stop Posting).',
+      });
+    });
+    pendingPostResolvers.current.clear();
+    try {
+      window.postMessage({ type: 'METUS_ABORT_QUEUE' }, window.location.origin);
+    } catch {
+      // ignore
+    }
+    addLog('warn', 'Menghentikan thread posting & membatalkan antrean ekstensi...');
   };
 
   if (showLandingPage) {
     return (
       <>
         <SaaSLandingPage
-          onEnterDashboard={() => setShowLandingPage(false)}
+          onEnterDashboard={() => {
+            sessionStorage.setItem('metus_entered_dashboard', 'true');
+            setShowLandingPage(false);
+          }}
           onOpenSecretAdmin={() => setIsSecretAdminOpen(true)}
           onUpgradeCompleted={(orderId, gateway) => {
             const upgraded: AuthUser = currentUser
@@ -1021,6 +1042,7 @@ export default function App() {
               isPosting={isPosting}
               onStartPosting={handleStartPosting}
               onStopPosting={handleStopPosting}
+              onRetryFailedGroups={handleRetryFailedGroups}
               results={results}
               onPreviewPostResult={(item) => setPreviewResultItem(item)}
               logs={logs}

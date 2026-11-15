@@ -15,8 +15,6 @@ const JWT_SECRET = process.env.JWT_SECRET || 'metus_jwt_secret_key_2026_secure';
 
 const DEFAULT_LIVE_PAYPAL_CLIENT_ID =
   'BAAEaww49ypRDZfMIBESd0o_OEeDRlZzpNdDLeV0cC3Qh7qj2Z4WEskpGc8J-LA9Ux4ND0JHkY_C7XaaFU';
-const DEFAULT_LIVE_PAYPAL_SECRET =
-  'EDZMXg6sHLcaGQqV9NoZBLOcvB0z2JEAi7ZHrY2XN9V3EYcMy9UGwncnbkME2QeCgf_Mhy8BS_gaFsHv';
 
 const PAYPAL_CONFIG = {
   mode: (process.env.PAYPAL_MODE || 'live').toLowerCase() === 'sandbox' ? 'sandbox' : 'live',
@@ -32,7 +30,7 @@ const PAYPAL_CONFIG = {
     process.env.PAYPAL_CLIENT_SECRET &&
     !process.env.PAYPAL_CLIENT_SECRET.includes('paste_full_kode_rahasia')
       ? process.env.PAYPAL_CLIENT_SECRET.trim()
-      : DEFAULT_LIVE_PAYPAL_SECRET,
+      : '',
   webhookId: process.env.PAYPAL_WEBHOOK_ID || 'PAYPAL_LIVE_DIRECT_CAPTURE',
   appBaseUrl: (process.env.APP_BASE_URL || 'https://athay04-cloud.github.io/autopost').replace(/\/+$/, ''),
   get apiBaseUrl() {
@@ -131,8 +129,31 @@ interface DatabaseSchema {
 const DB_FILE_PATH = path.resolve(process.cwd(), '.data_store.json');
 
 function hashPassword(password: string): string {
-  const salt = 'metus_salt_v1';
-  return crypto.scryptSync(password, salt, 64).toString('hex');
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  if (!storedHash) return false;
+  try {
+    if (storedHash.includes(':')) {
+      const [salt, keyHex] = storedHash.split(':');
+      if (!salt || !keyHex) return false;
+      const keyBuf = Buffer.from(keyHex, 'hex');
+      const derivedBuf = crypto.scryptSync(password, salt, 64);
+      if (keyBuf.length !== derivedBuf.length) return false;
+      return crypto.timingSafeEqual(keyBuf, derivedBuf);
+    }
+    // Backward-compatible verification for existing legacy accounts in .data_store.json
+    const legacyHex = crypto.scryptSync(password, 'metus_salt_v1', 64).toString('hex');
+    const a = Buffer.from(storedHash, 'utf8');
+    const b = Buffer.from(legacyHex, 'utf8');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 function ensureSeedAdmin(database: DatabaseSchema): DatabaseSchema {
@@ -181,11 +202,10 @@ function loadDatabase(): DatabaseSchema {
 }
 
 function saveDatabase(db: DatabaseSchema): void {
-  try {
-    fs.writeFileSync(DB_FILE_PATH, JSON.stringify(db, null, 2), 'utf-8');
-  } catch {
+  const serialized = JSON.stringify(db, null, 2);
+  fs.promises.writeFile(DB_FILE_PATH, serialized, 'utf-8').catch(() => {
     // Ignore read-only fs errors in restricted containers
-  }
+  });
 }
 
 const db = loadDatabase();
@@ -220,7 +240,11 @@ function verifyJwt(token: string): { userId: string; email: string; role: string
       .createHmac('sha256', JWT_SECRET)
       .update(`${header}.${body}`)
       .digest('base64url');
-    if (sig !== expectedSig) return null;
+    const sigBuf = Buffer.from(sig, 'utf8');
+    const expectedBuf = Buffer.from(expectedSig, 'utf8');
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return null;
+    }
     const decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf-8'));
     if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) return null;
     return decoded;
@@ -387,7 +411,7 @@ async function startServer() {
     const normalizedEmail = String(email || '').trim().toLowerCase();
 
     const user = db.users.find((u) => u.email.toLowerCase() === normalizedEmail);
-    if (!user || user.passwordHash !== hashPassword(String(password || ''))) {
+    if (!user || !verifyPassword(String(password || ''), user.passwordHash)) {
       res.status(401).json({
         success: false,
         message: 'Email atau password salah. Gunakan demo@metus.id / password123 atau daftar akun baru.',
@@ -992,9 +1016,16 @@ async function startServer() {
     };
   };
 
+  const isMasterKeyMatch = (candidate: string): boolean => {
+    if (!candidate) return false;
+    const a = Buffer.from(candidate, 'utf8');
+    const b = Buffer.from(ADMIN_MASTER_KEY, 'utf8');
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  };
+
   const requireAdminAuth = (req: express.Request, res: express.Response): boolean => {
     const adminHeader = String(req.headers['x-admin-token'] || '');
-    if (adminHeader === ADMIN_MASTER_KEY) return true;
+    if (isMasterKeyMatch(adminHeader)) return true;
     const verified = verifyJwt(adminHeader);
     if (verified && verified.role === 'ADMIN') return true;
     res.status(403).json({
@@ -1007,7 +1038,7 @@ async function startServer() {
   app.post('/api/admin/unlock', (req, res) => {
     const { passkey, email, password } = req.body || {};
 
-    if (passkey && String(passkey).trim() === ADMIN_MASTER_KEY) {
+    if (passkey && isMasterKeyMatch(String(passkey).trim())) {
       const adminUser = db.users.find((u) => u.role === 'ADMIN') || db.users[0];
       const adminToken = signJwt(
         {
@@ -1030,7 +1061,7 @@ async function startServer() {
       const user = db.users.find(
         (u) => u.email.toLowerCase() === String(email).trim().toLowerCase()
       );
-      if (user && user.passwordHash === hashPassword(String(password)) && user.role === 'ADMIN') {
+      if (user && verifyPassword(String(password), user.passwordHash) && user.role === 'ADMIN') {
         const adminToken = signJwt(
           {
             userId: user.id,

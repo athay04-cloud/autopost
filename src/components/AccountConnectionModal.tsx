@@ -234,7 +234,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-white/20 text-white">
                       Manifest V3 Ready
                     </span>
-                    <span className="text-xs opacity-90 font-medium">Versi 1.1.8 (Anti-Perasaan/Aktivitas + Paragraf 1:1 + Multi-Foto + Silent Tab)</span>
+                    <span className="text-xs opacity-90 font-medium">Versi 1.2.0 (Anti-Timeout Service Worker + Auto-Comment + Queue Abort + Grup Jual Beli/Diskusi + Multi-Foto)</span>
                   </div>
                   <h3 className="text-lg font-bold">
                     metus-auto-post-chrome-extension.zip
@@ -263,7 +263,7 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                   ) : (
                     <>
                       <Download className="w-4 h-4 text-blue-600" />
-                      <span>Download ZIP v1.1.4 (Terbaru)</span>
+                      <span>Download ZIP v1.2.0 (Terbaru)</span>
                     </>
                   )}
                 </button>
@@ -274,8 +274,8 @@ export const AccountConnectionModal: React.FC<AccountConnectionModalProps> = ({
                 <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-xs space-y-1">
                   <div className="font-bold text-emerald-800 dark:text-emerald-200 flex items-center gap-1.5">
-                    <span>⚡ Pembaruan v1.1.4: Auto-Matikan Sakelar Anonim Saat Tidak Dicentang + Anti-Timeout 120s</span>
-                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">v1.1.4 Fix</span>
+                    <span>⚡ Pembaruan v1.2.0: Anti-Timeout 120s, Single-Thread Queue Lock, Auto-Comment & Instant Stop Abort</span>
+                    <span className="px-1.5 py-0.2 bg-emerald-200 text-emerald-800 dark:bg-emerald-800 dark:text-emerald-100 text-[10px] rounded font-mono font-semibold">v1.2.0 Fix</span>
                   </div>
                   <div className="text-slate-600 dark:text-slate-300 leading-relaxed text-[11px]">
                     <strong>1. Fix Sakelar Anonim &quot;Menyangkut&quot; Saat Tidak Dicentang:</strong> Facebook menyimpan status sakelar <em>Posting secara anonim</em> tetap ON setelah Anda pernah memposting secara anonim. Kini saat <em>Anonymous Mode</em> <strong>tidak dicentang</strong>, ekstensi otomatis mematikan sakelar anonim di Facebook agar postingan kembali menggunakan nama akun asli Anda.

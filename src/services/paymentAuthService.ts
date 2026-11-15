@@ -126,7 +126,21 @@ export function shouldTriggerFallback(err: unknown): boolean {
 // LOCAL VAULT ENGINE (FALLBACK UNTUK STATIC HOSTING / OFFLINE)
 // ============================================================================
 interface LocalUserEntry extends AuthUser {
-  passwordPlain?: string;
+  passwordHash?: string;
+}
+
+function hashLocalPassword(raw: string): string {
+  const input = `metus_v2_salt::${raw}`;
+  let h1 = 0xdeadbeef ^ input.length;
+  let h2 = 0x41c6ce57 ^ input.length;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `lh2_${(h2 >>> 0).toString(16).padStart(8, '0')}${(h1 >>> 0).toString(16).padStart(8, '0')}`;
 }
 
 function getLocalMasterKey(): string {
@@ -143,20 +157,27 @@ function loadLocalUsersDb(): LocalUserEntry[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const hasAdmin = parsed.some((u: LocalUserEntry) => u.email.toLowerCase() === 'admin@metus.id');
+        const sanitized = parsed.map((u: any) => {
+          const { passwordPlain, ...rest } = u;
+          return {
+            ...rest,
+            passwordHash: u.passwordHash || (passwordPlain ? hashLocalPassword(String(passwordPlain)) : undefined),
+          };
+        });
+        const hasAdmin = sanitized.some((u: LocalUserEntry) => u.email.toLowerCase() === 'admin@metus.id');
         if (!hasAdmin) {
-          parsed.unshift({
+          sanitized.unshift({
             id: 'usr_root_admin',
             fullName: 'Root Administrator (Metus)',
             email: 'admin@metus.id',
-            passwordPlain: 'admin2026',
+            passwordHash: hashLocalPassword('admin2026'),
             role: 'ADMIN',
             plan: 'AGENCY',
             planActivatedAt: new Date().toISOString(),
             createdAt: new Date().toISOString(),
           });
         }
-        return parsed;
+        return sanitized;
       }
     }
   } catch {
@@ -168,7 +189,7 @@ function loadLocalUsersDb(): LocalUserEntry[] {
       id: 'usr_root_admin',
       fullName: 'Root Administrator (Metus)',
       email: 'admin@metus.id',
-      passwordPlain: 'admin2026',
+      passwordHash: hashLocalPassword('admin2026'),
       role: 'ADMIN',
       plan: 'AGENCY',
       planActivatedAt: new Date().toISOString(),
@@ -178,7 +199,7 @@ function loadLocalUsersDb(): LocalUserEntry[] {
       id: 'usr_demo_01',
       fullName: 'Budi Santoso (Demo)',
       email: 'demo@metus.id',
-      passwordPlain: 'password123',
+      passwordHash: hashLocalPassword('password123'),
       role: 'USER',
       plan: 'FREE',
       createdAt: new Date().toISOString(),
@@ -233,7 +254,7 @@ function saveLocalTransactionsDb(txs: QrisTransaction[]): void {
 
 function buildLocalAdminOverview(extra?: Partial<AdminOverviewPayload>): AdminOverviewPayload {
   const rawUsers = loadLocalUsersDb();
-  const users: AuthUser[] = rawUsers.map(({ passwordPlain: _pw, ...rest }) => rest);
+  const users: AuthUser[] = rawUsers.map(({ passwordHash: _ph, ...rest }) => rest);
   const transactions = loadLocalTransactionsDb();
   const paidTxs = transactions.filter((t) => t.status === 'PAID');
   const domesticRevenueIdr = paidTxs
@@ -344,7 +365,7 @@ export async function apiRegisterUser(payload: {
       plan: 'FREE',
       createdAt: new Date().toISOString(),
     };
-    localUsers.push({ ...fallbackUser, passwordPlain: payload.password });
+    localUsers.push({ ...fallbackUser, passwordHash: hashLocalPassword(payload.password) });
     saveLocalUsersDb(localUsers);
 
     const fallbackToken = `jwt_local_${btoa(encodeURIComponent(JSON.stringify(fallbackUser)))}`;
@@ -822,7 +843,7 @@ export async function apiAdminUnlock(
         (u) =>
           u.email.toLowerCase() === cleanEmail &&
           u.role === 'ADMIN' &&
-          (u.passwordPlain === payload.password || payload.password === 'admin2026')
+          (u.passwordHash === hashLocalPassword(String(payload.password)) || payload.password === 'admin2026')
       );
       if (adminMatch) {
         return buildLocalAdminOverview({
@@ -927,7 +948,7 @@ export async function apiAdminCreateUser(
       id: `usr_${Date.now().toString(36)}`,
       fullName: payload.fullName.trim(),
       email: cleanEmail,
-      passwordPlain: payload.password,
+      passwordHash: hashLocalPassword(payload.password),
       role: payload.role,
       plan: payload.plan,
       planActivatedAt: payload.plan !== 'FREE' ? new Date().toISOString() : undefined,

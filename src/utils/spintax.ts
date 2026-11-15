@@ -6,12 +6,12 @@
 export function parseSpintax(text: string): string {
   if (!text) return '';
 
-  const spintaxRegex = /\{([^{}]+)\}/g;
   let result = text;
+  let maxIterations = 25; // Guard anti-infinite loop jika kurung kurawal bersarang dalam
 
   // Process innermost brackets first until no brackets remain
-  while (spintaxRegex.test(result)) {
-    result = result.replace(spintaxRegex, (_, options) => {
+  while (maxIterations-- > 0 && /\{[^{}]+\}/.test(result)) {
+    result = result.replace(/\{([^{}]+)\}/g, (_, options: string) => {
       const choices = options.split('|');
       const randomIndex = Math.floor(Math.random() * choices.length);
       return choices[randomIndex] ?? '';
