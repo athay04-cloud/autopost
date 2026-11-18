@@ -34,6 +34,8 @@ import {
   cleanGroupDisplayName,
   computeGroupInitials,
   normalizeSavedGroupList,
+  isBogusRelayGroupId,
+  extractValidGroupId,
 } from './utils/groupNormalizer';
 
 export default function App() {
@@ -148,12 +150,22 @@ export default function App() {
     return INITIAL_PRESETS;
   });
 
-  // Selected Group IDs
+  // Selected Group IDs (otomatis buang ID Relay/Bookmark Base64 palsu seperti Ym9va21hcms6...)
   const [selectedGroupIds, setSelectedGroupIds] = React.useState<string[]>(() => {
     const saved = localStorage.getItem('metus_selected_group_ids');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const validIds = Array.from(
+            new Set(
+              parsed
+                .map((id) => extractValidGroupId(String(id || '')))
+                .filter(Boolean)
+            )
+          );
+          if (validIds.length > 0) return validIds;
+        }
       } catch {
         // fallback
       }
@@ -208,16 +220,20 @@ export default function App() {
         }
 
         if (Array.isArray(syncedGroups) && syncedGroups.length > 0) {
+          const validSyncedGroups = syncedGroups.filter(
+            (g: any) => g && extractValidGroupId(g.id, g.url)
+          );
           setGroups((prev) => {
+            const prevClean = prev.filter((p) => !isBogusRelayGroupId(p.id));
             const prevNameMap = new Map<string, string>();
-            prev.forEach((p) => {
+            prevClean.forEach((p) => {
               if (!isPlaceholderGroupName(p.name, p.id)) {
                 prevNameMap.set(p.id, p.name);
               }
             });
 
-            const formatted: FacebookGroup[] = syncedGroups.map((g: any, idx: number) => {
-              const idStr = String(g.id);
+            const formatted: FacebookGroup[] = validSyncedGroups.map((g: any, idx: number) => {
+              const idStr = extractValidGroupId(g.id, g.url);
               const bestName = cleanGroupDisplayName(g.name, idStr, prevNameMap.get(idStr));
               return {
                 id: idStr,
@@ -235,17 +251,24 @@ export default function App() {
             });
 
             const existingIds = new Set(formatted.map((f) => f.id));
-            const merged = [...formatted, ...prev.filter((p) => !existingIds.has(p.id))];
-            localStorage.setItem('metus_saved_groups', JSON.stringify(merged));
+            const merged = [...formatted, ...prevClean.filter((p) => !existingIds.has(p.id))];
+            try {
+              localStorage.setItem('metus_saved_groups', JSON.stringify(merged));
+            } catch {
+              // ignore quota
+            }
             return merged;
           });
-          setSelectedGroupIds((prev) =>
-            prev.length > 0 ? prev : syncedGroups.map((f: any) => String(f.id))
-          );
-          if (shouldLogSync) {
+          setSelectedGroupIds((prev) => {
+            const cleanPrev = prev.filter((id) => !isBogusRelayGroupId(id));
+            return cleanPrev.length > 0
+              ? cleanPrev
+              : validSyncedGroups.map((f: any) => extractValidGroupId(f.id, f.url)).filter(Boolean);
+          });
+          if (shouldLogSync && validSyncedGroups.length > 0) {
             addLog(
               'success',
-              `Ekstensi Chrome berhasil menyinkronkan ${syncedGroups.length} grup Facebook beserta nama grup ke dashboard!`
+              `Ekstensi Chrome berhasil menyinkronkan ${validSyncedGroups.length} grup Facebook valid beserta nama grup ke dashboard!`
             );
           }
         }
@@ -573,25 +596,33 @@ export default function App() {
       }
     }
 
-    // Filter & deduplicate target group objects by ID so a group is never queued twice
+    // Filter & deduplicate target group objects by ID (dan buang otomatis ID Bookmark Relay palsu Ym9va21hcms6...)
     const seenGroupIds = new Set<string>();
     const targetGroups = groups.filter((g) => {
       if (!activeTargetIds.includes(g.id)) return false;
+      if (isBogusRelayGroupId(g.id)) return false;
       if (seenGroupIds.has(g.id)) return false;
       seenGroupIds.add(g.id);
       return true;
     });
 
-    // PENTING: Ketika terhubung ke Ekstensi Chrome nyata, kunci ke 1 thread sekuensial agar tidak terjadi
-    // penumpukan antrean (queue pile-up) dan false-timeout 120 detik di Service Worker Chrome!
-    const effectiveThreadCount = isFbConnected ? 1 : Math.max(1, executionParams.threadCount);
+    if (targetGroups.length === 0) {
+      isPostingRef.current = false;
+      setIsPosting(false);
+      addLog(
+        'warn',
+        'Grup yang dipilih berisi ID Bookmark lama yang tidak valid. Daftar grup telah dibersihkan otomatis—silakan pilih grup target yang valid.'
+      );
+      return;
+    }
+
+    // Jalankan sejumlah thread simultan sesuai konfigurasi THREAD COUNTER pengguna (mis. 5 threads simultan)
+    const effectiveThreadCount = Math.max(1, executionParams.threadCount);
     const totalCycles = executionParams.advancedCycle ? Math.max(1, executionParams.cycleCount) : 1;
 
     addLog(
       'info',
-      `Memulai otomasi: ${targetGroups.length} grup target unik, ${effectiveThreadCount} thread${
-        isFbConnected && executionParams.threadCount > 1 ? ' (dikunci 1 thread sekuensial untuk stabilitas Ekstensi Chrome)' : ''
-      }, jeda acak ${executionParams.delayMinSeconds}-${executionParams.delayMaxSeconds}s${
+      `Memulai otomasi: ${targetGroups.length} grup target unik, ${effectiveThreadCount} threads simultan, jeda acak ${executionParams.delayMinSeconds}-${executionParams.delayMaxSeconds}s${
         totalCycles > 1 ? `, ${totalCycles} siklus berulang` : ''
       }.`
     );
@@ -736,14 +767,15 @@ export default function App() {
                 message?: string;
                 postUrl?: string;
               }>((resolve) => {
+                const safetyTimeoutMs = Math.max(180000, effectiveThreadCount * 75000);
                 const timeout = setTimeout(() => {
                   pendingPostResolvers.current.delete(resultId);
                   resolve({
                     success: false,
                     error:
-                      'Timeout: Ekstensi membutuhkan waktu lebih dari 120 detik. Pastikan tab Facebook dapat memuat halaman.',
+                      'Timeout: Ekstensi membutuhkan waktu lebih dari batas tunggu. Pastikan tab Facebook dapat memuat halaman.',
                   });
-                }, 120000);
+                }, safetyTimeoutMs);
 
                 pendingPostResolvers.current.set(resultId, (res) => {
                   clearTimeout(timeout);
@@ -766,7 +798,7 @@ export default function App() {
                   const isModernBridge = bridgeVer.startsWith('1.') && bridgeVer !== '1.0.7';
                   if (
                     isAnonymous &&
-                    !['1.2.0', '1.1.9', '1.1.8', '1.1.7', '1.1.6', '1.1.5', '1.1.4', '1.1.3', '1.1.2'].includes(
+                    !['1.2.1', '1.2.0', '1.1.9', '1.1.8', '1.1.7', '1.1.6', '1.1.5', '1.1.4', '1.1.3', '1.1.2'].includes(
                       extVer
                     )
                   ) {
@@ -774,13 +806,15 @@ export default function App() {
                       'warn',
                       `[Thread #${workerId}] PERINGATAN: Mode Anonim aktif, tetapi Ekstensi Chrome Anda masih versi lama (${
                         extVer || 'lama'
-                      }). Unduh & pasang ZIP Ekstensi v1.2.0 agar tombol Postingan Anonim Facebook diklik otomatis!`
+                      }). Unduh & pasang ZIP Ekstensi v1.2.1 agar tombol Postingan Anonim Facebook diklik otomatis!`
                     );
                   }
                   window.postMessage(
                     {
                       type: isModernBridge ? 'METUS_DISPATCH_POST_V2' : 'METUS_DISPATCH_POST',
                       groupId: group.id,
+                      groupName: group.name,
+                      maxConcurrency: effectiveThreadCount,
                       content: rendered,
                       firstComment: resolvedFirstComment,
                       photoUrls: scenToUse.photoUrls || [],

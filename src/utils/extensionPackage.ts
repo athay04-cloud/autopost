@@ -16,8 +16,8 @@ export const EXTENSION_FILES: ExtensionFileDefinition[] = [
       {
         manifest_version: 3,
         name: 'Metus Auto-Post - Facebook Automation Bridge',
-        version: '1.2.0',
-        description: 'Ekstensi otomasi posting Facebook Group v1.2.0 (Anti-Throttle Service Worker Timer, Auto-Comment, Queue Abort, Grup Jual Beli & Diskusi Support, Paragraf 1:1 & Multi-Foto).',
+        version: '1.2.1',
+        description: 'Ekstensi otomasi posting Facebook Group v1.2.1 (Multi-Thread Concurrent Engine, Filter Anti-Bookmark Base64 ID, Anti-Throttle Timer, Auto-Comment, Grup Jual Beli & Multi-Foto).',
         permissions: ['cookies', 'tabs', 'scripting', 'storage', 'activeTab'],
         host_permissions: [
           'https://*.facebook.com/*',
@@ -88,6 +88,57 @@ async function getFacebookSession() {
   });
 }
 
+// Helper: Cek apakah ID merupakan Relay Global ID / Bookmark Base64 palsu (contoh: "Ym9va21hcms6MTAwMDIzMDM...")
+function isBogusRelayGroupId(rawId) {
+  if (!rawId) return true;
+  const str = String(rawId).trim();
+  if (!str || str.length < 2) return true;
+  if (/^(Ym9va21hcms|Z3JvdXA6|c2hvcnRjdXQ6|ZmVlZF8|dXNlcjo|cGFnZTo|bm90aWZpY2F0aW9u)/i.test(str)) {
+    return true;
+  }
+  if (str.includes("=") || str.includes(":")) return true;
+  if (
+    str.length >= 20 &&
+    /^[A-Za-z0-9+/]+$/.test(str) &&
+    /[A-Z]/.test(str) &&
+    /[a-z]/.test(str) &&
+    /\\d/.test(str)
+  ) {
+    try {
+      const decoded = atob(str);
+      if (/^[a-z_]+:\\d+/i.test(decoded)) return true;
+    } catch (e) {}
+  }
+  return false;
+}
+
+function extractValidGroupId(rawId, rawUrl) {
+  if (rawUrl && typeof rawUrl === "string" && rawUrl.includes("/groups/")) {
+    const m = rawUrl.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,80})/);
+    if (m && m[1]) {
+      const candidate = m[1].split("?")[0].split("/")[0].trim();
+      if (candidate && !isBogusRelayGroupId(candidate)) return candidate;
+    }
+  }
+  const idStr = String(rawId || "").trim();
+  if (!idStr) return "";
+  if (!isBogusRelayGroupId(idStr)) return idStr;
+  try {
+    const cleanB64 = idStr.replace(/[^A-Za-z0-9+/=]/g, "");
+    const padded = cleanB64 + "=".repeat((4 - (cleanB64.length % 4)) % 4);
+    const decoded = atob(padded);
+    const parts = decoded.split(":");
+    if (parts.length >= 3) {
+      const lastPart = parts[parts.length - 1].trim();
+      if (/^\\d{5,25}$/.test(lastPart)) return lastPart;
+    } else if (parts.length === 2 && /^group$/i.test(parts[0].trim())) {
+      const secondPart = parts[1].trim();
+      if (/^\\d{5,25}$/.test(secondPart)) return secondPart;
+    }
+  } catch (e) {}
+  return "";
+}
+
 // Helper: Cek apakah nama masih berupa placeholder "Grup FB <id>"
 function isPlaceholderGroupName(name, idOrSlug) {
   if (!name) return true;
@@ -96,6 +147,7 @@ function isPlaceholderGroupName(name, idOrSlug) {
   if (trimmed.toLowerCase() === String(idOrSlug || "").toLowerCase()) return true;
   if (/^grup\\s+(komunitas\\s+)?(fb|facebook)\\b/i.test(trimmed)) return true;
   if (/^komunitas\\s+fb\\s*#/i.test(trimmed)) return true;
+  if (isBogusRelayGroupId(trimmed)) return true;
   return false;
 }
 
@@ -275,25 +327,27 @@ async function scanGroupsFromOpenTabs() {
               return;
             }
 
-            const isGroupType =
+            const isStrictGroupNode =
               node.__typename === "Group" ||
-              node.__isGroup === "Group" ||
-              (typeof node.url === "string" && node.url.includes("/groups/")) ||
-              node.group_member_profiles !== undefined ||
-              node.viewer_join_state !== undefined ||
-              node.viewer_post_status !== undefined ||
-              node.last_activity_time !== undefined;
+              node.__isGroup === "Group";
+            const hasGroupUrl =
+              typeof node.url === "string" && node.url.includes("/groups/");
 
-            if (isGroupType && typeof node.name === "string" && node.name.trim().length >= 2) {
+            if ((isStrictGroupNode || hasGroupUrl) && typeof node.name === "string" && node.name.trim().length >= 2) {
               const gName = node.name.trim();
-              if (node.id && isValidCandidateLine(gName, node.id)) {
-                jsonNames.set(String(node.id), gName);
+              // PENTING: Hanya gunakan node.id jika node benar-benar bertipe Group DAN node.id adalah angka murni (bukan Base64 Bookmark Ym9va21hcms6...)
+              if (isStrictGroupNode && node.id && /^\\d{5,25}$/.test(String(node.id).trim())) {
+                const numericId = String(node.id).trim();
+                if (isValidCandidateLine(gName, numericId)) {
+                  jsonNames.set(numericId, gName);
+                }
               }
-              if (typeof node.url === "string") {
+              if (hasGroupUrl) {
                 const m = node.url.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
                 if (m && m[1]) {
                   const slug = m[1].split("?")[0].split("/")[0];
-                  if (slug && !ignore.has(slug.toLowerCase()) && isValidCandidateLine(gName, slug)) {
+                  const isBogus = /^(Ym9va21hcms|Z3JvdXA6|c2hvcnRjdXQ6|ZmVlZF8|dXNlcjo|cGFnZTo)/i.test(slug) || slug.includes("=");
+                  if (slug && !isBogus && !ignore.has(slug.toLowerCase()) && isValidCandidateLine(gName, slug)) {
                     jsonNames.set(slug, gName);
                   }
                 }
@@ -400,7 +454,8 @@ async function scanGroupsFromOpenTabs() {
             if (!match || !match[1]) return;
 
             const idOrSlug = match[1].split("?")[0].split("/")[0];
-            if (!idOrSlug || ignore.has(idOrSlug.toLowerCase())) return;
+            const isBogus = /^(Ym9va21hcms|Z3JvdXA6|c2hvcnRjdXQ6|ZmVlZF8|dXNlcjo|cGFnZTo)/i.test(idOrSlug) || idOrSlug.includes("=");
+            if (!idOrSlug || isBogus || ignore.has(idOrSlug.toLowerCase())) return;
 
             const detectedName = extractBestNameFromAnchor(a, idOrSlug);
             const existing = groupMap.get(idOrSlug);
@@ -619,18 +674,28 @@ async function resolveRemainingGroupsInBackground() {
   }
 }
 
-// 3B. Normalisasi cepat nama grup secara instan (< 5ms) tanpa memblokir popup dengan request jaringan lambat
+// 3B. Normalisasi cepat nama grup secara instan (< 5ms) & buang ID Relay/Bookmark Base64 palsu (Ym9va21hcms6...)
 function normalizeGroupsFast(groups) {
-  return groups.map((g) => {
-    const hasReal = !isPlaceholderGroupName(g.name, g.id);
-    const cleanName = hasReal ? g.name.trim() : humanizeGroupSlug(g.id);
-    return {
-      id: g.id,
+  const dedup = new Map();
+  for (const g of groups) {
+    if (!g) continue;
+    const validId = extractValidGroupId(g.id, g.url);
+    if (!validId) continue;
+    const hasReal = !isPlaceholderGroupName(g.name, validId);
+    const prev = dedup.get(validId);
+    const cleanName = hasReal
+      ? g.name.trim()
+      : prev && !prev.isPlaceholder
+      ? prev.name
+      : humanizeGroupSlug(validId);
+    dedup.set(validId, {
+      id: validId,
       name: cleanName,
-      url: g.url || ("https://www.facebook.com/groups/" + g.id),
-      isPlaceholder: !hasReal
-    };
-  });
+      url: "https://www.facebook.com/groups/" + validId,
+      isPlaceholder: !hasReal && (!prev || prev.isPlaceholder)
+    });
+  }
+  return Array.from(dedup.values());
 }
 
 // 4. Handler Utama Pengambilan Grup (INSTAN < 0.5 DETIK!)
@@ -644,8 +709,9 @@ async function fetchUserFacebookGroups() {
   const existingGroups = Array.isArray(savedData.metus_groups) ? savedData.metus_groups : [];
   const existingRealNames = new Map();
   existingGroups.forEach((eg) => {
-    if (eg && eg.id && eg.name && !isPlaceholderGroupName(eg.name, eg.id)) {
-      existingRealNames.set(eg.id, eg.name);
+    const validId = extractValidGroupId(eg?.id, eg?.url);
+    if (validId && eg.name && !isPlaceholderGroupName(eg.name, validId)) {
+      existingRealNames.set(validId, eg.name);
     }
   });
 
@@ -655,26 +721,28 @@ async function fetchUserFacebookGroups() {
   // 2. Gabungkan grup yang baru ter-scan dengan grup yang sudah tersimpan di memori ekstensi
   const mergedMap = new Map();
   existingGroups.forEach((eg) => {
-    if (eg && eg.id) {
-      mergedMap.set(eg.id, {
-        id: eg.id,
-        name: existingRealNames.get(eg.id) || eg.name || "",
-        url: eg.url || ("https://www.facebook.com/groups/" + eg.id),
-        isPlaceholder: !existingRealNames.has(eg.id)
+    const validId = extractValidGroupId(eg?.id, eg?.url);
+    if (validId) {
+      mergedMap.set(validId, {
+        id: validId,
+        name: existingRealNames.get(validId) || eg.name || "",
+        url: "https://www.facebook.com/groups/" + validId,
+        isPlaceholder: !existingRealNames.has(validId)
       });
     }
   });
 
   scannedGroups.forEach((sg) => {
-    if (!sg || !sg.id) return;
-    const prev = mergedMap.get(sg.id);
-    const sgHasRealName = sg.name && !isPlaceholderGroupName(sg.name, sg.id);
+    const validId = extractValidGroupId(sg?.id, sg?.url);
+    if (!validId) return;
+    const prev = mergedMap.get(validId);
+    const sgHasRealName = sg.name && !isPlaceholderGroupName(sg.name, validId);
     if (!prev || sgHasRealName || prev.isPlaceholder) {
-      mergedMap.set(sg.id, {
-        id: sg.id,
-        name: sgHasRealName ? sg.name : (existingRealNames.get(sg.id) || sg.name || ""),
-        url: sg.url || ("https://www.facebook.com/groups/" + sg.id),
-        isPlaceholder: !sgHasRealName && !existingRealNames.has(sg.id)
+      mergedMap.set(validId, {
+        id: validId,
+        name: sgHasRealName ? sg.name : (existingRealNames.get(validId) || sg.name || ""),
+        url: "https://www.facebook.com/groups/" + validId,
+        isPlaceholder: !sgHasRealName && !existingRealNames.has(validId)
       });
     }
   });
@@ -706,6 +774,8 @@ async function fetchUserFacebookGroups() {
   };
 }
 
+let wakeTabChain = Promise.resolve();
+
 // Listener pesan dari Popup & Dashboard
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "CHECK_FB_STATUS") {
@@ -720,7 +790,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "GET_SAVED_GROUPS") {
     chrome.storage.local.get(["metus_fb_uid", "metus_groups"], async (data) => {
-      const savedList = Array.isArray(data.metus_groups) ? data.metus_groups : [];
+      const rawList = Array.isArray(data.metus_groups) ? data.metus_groups : [];
+      const savedList = normalizeGroupsFast(rawList);
+      if (savedList.length !== rawList.length) {
+        chrome.storage.local.set({ metus_groups: savedList });
+      }
       const hasPlaceholders = savedList.some((g) => isPlaceholderGroupName(g.name, g.id));
 
       if (hasPlaceholders) {
@@ -760,7 +834,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ ok: false });
       return true;
     }
-    (async () => {
+    wakeTabChain = wakeTabChain.then(async () => {
       try {
         const targetTab = await chrome.tabs.get(targetTabId);
         if (targetTab && targetTab.windowId) {
@@ -776,12 +850,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       try {
         sendResponse({ ok: true });
       } catch (e) {}
-    })();
+    });
     return true;
   }
 
   if (request.action === "EXECUTE_POST") {
-    // Masukkan ke antrean posting agar dieksekusi 1 per 1 secara stabil tanpa tab jumping
     const senderTabId = sender && sender.tab && sender.tab.id ? sender.tab.id : null;
     enqueuePostTask(request, sendResponse, senderTabId);
     return true;
@@ -799,24 +872,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       }
     }
-    if (activeAutomationTabId) {
-      const tabToClose = activeAutomationTabId;
-      activeAutomationTabId = null;
+    activeAutomationTabIds.forEach((tabToClose) => {
       try {
         chrome.tabs.remove(tabToClose, () => {
           void chrome.runtime.lastError;
         });
       } catch (e) {}
-    }
-    if (activeAutomationWindowId) {
-      const winToClose = activeAutomationWindowId;
-      activeAutomationWindowId = null;
+    });
+    activeAutomationTabIds.clear();
+    activeAutomationWindowIds.forEach((winToClose) => {
       try {
         chrome.windows.remove(winToClose, () => {
           void chrome.runtime.lastError;
         });
       } catch (e) {}
-    }
+    });
+    activeAutomationWindowIds.clear();
     sendResponse({ ok: true, abortedCount });
     return true;
   }
@@ -854,17 +925,22 @@ chrome.runtime.onInstalled.addListener(() => {
   reinjectDashboardBridgeToOpenTabs();
 });
 
-// Antrean eksekusi postingan: Memastikan hanya 1 tab Facebook yang aktif pada satu waktu & mencegah duplikasi klik ganda (<3 detik)
+// Antrean eksekusi postingan Multi-Worker: Mendukung eksekusi paralel sesuai THREAD COUNTER (1 - 5 tab latar belakang simultan)
 const postQueue = [];
-let isQueueBusy = false;
-let activeAutomationTabId = null;
-let activeAutomationWindowId = null;
+let activeWorkersCount = 0;
+let maxConcurrentWorkers = 5;
+const activeAutomationTabIds = new Set();
+const activeAutomationWindowIds = new Set();
 const recentPostLocks = new Map();
 
 function enqueuePostTask(request, sendResponse, senderTabId) {
   const now = Date.now();
   const resultLockKey = "RES::" + (request.resultId || "");
   const prevResultTime = request.resultId ? recentPostLocks.get(resultLockKey) : 0;
+
+  if (request.maxConcurrency && Number(request.maxConcurrency) >= 1) {
+    maxConcurrentWorkers = Math.min(5, Math.max(1, Number(request.maxConcurrency)));
+  }
 
   // Hanya cegah duplikasi jika resultId yang PERSIS SAMA dikirim dua kali dalam < 3 detik
   if (prevResultTime && now - prevResultTime < 3000) {
@@ -912,32 +988,60 @@ async function notifyDashboardPostResult(item, res) {
   }
 }
 
-async function processNextPostQueue() {
-  if (isQueueBusy || postQueue.length === 0) return;
-  isQueueBusy = true;
-  const item = postQueue.shift();
-
-  try {
-    const res = await executeSingleFacebookGroupPost(item.request);
-    await notifyDashboardPostResult(item, res);
-  } catch (err) {
-    console.error("[Metus Background] Post runner error:", err);
-    await notifyDashboardPostResult(item, {
-      success: false,
-      postUrl: "https://www.facebook.com/groups/" + item.request.groupId,
-      error: "Kesalahan eksekusi: " + (err.message || String(err))
-    });
-  } finally {
-    isQueueBusy = false;
-    setTimeout(processNextPostQueue, 800);
+function processNextPostQueue() {
+  while (activeWorkersCount < maxConcurrentWorkers && postQueue.length > 0) {
+    const item = postQueue.shift();
+    if (!item) break;
+    activeWorkersCount++;
+    (async () => {
+      try {
+        const res = await executeSingleFacebookGroupPost(item.request);
+        await notifyDashboardPostResult(item, res);
+      } catch (err) {
+        console.error("[Metus Background] Post runner error:", err);
+        await notifyDashboardPostResult(item, {
+          success: false,
+          postUrl: "https://www.facebook.com/groups/" + item.request.groupId,
+          error: "Kesalahan eksekusi: " + (err.message || String(err))
+        });
+      } finally {
+        activeWorkersCount = Math.max(0, activeWorkersCount - 1);
+        setTimeout(processNextPostQueue, 400);
+      }
+    })();
   }
 }
 
 // Menjalankan postingan dalam MODE SILENT BACKGROUND TAB (TANPA JENDELA POPUP DI LAYAR)
 // Dilengkapi MV3 Service Worker Keep-Alive Heartbeat & Anti-Throttle Timer
 async function executeSingleFacebookGroupPost(request) {
-  const groupUrl = "https://www.facebook.com/groups/" + request.groupId + "/?sorting_setting=CHRONOLOGICAL";
-  console.log("[Metus Silent Engine v1.2.0] Membuka silent background tab untuk:", groupUrl, "isAnonymous:", !!request.isAnonymous);
+  let targetGroupId = extractValidGroupId(request.groupId);
+
+  // Jika groupId yang dikirim adalah ID Bookmark Base64 palsu (Ym9va21hcms6...), cari ID grup asli berdasarkan nama grup di storage!
+  if (!targetGroupId && request.groupName) {
+    try {
+      const st = await chrome.storage.local.get(["metus_groups"]);
+      const savedList = Array.isArray(st.metus_groups) ? st.metus_groups : [];
+      const reqNameLower = String(request.groupName).trim().toLowerCase();
+      const matched = savedList.find(
+        (g) => g && g.name && String(g.name).trim().toLowerCase() === reqNameLower && !isBogusRelayGroupId(g.id)
+      );
+      if (matched && matched.id) {
+        targetGroupId = String(matched.id).trim();
+      }
+    } catch (e) {}
+  }
+
+  if (!targetGroupId) {
+    return {
+      success: false,
+      postUrl: "https://www.facebook.com/groups/",
+      error: "ID Grup ini adalah ID Bookmark Relay Facebook (Ym9va21hcms6...), bukan ID grup asli. Duplikat tidak valid ini telah dibersihkan otomatis."
+    };
+  }
+
+  const groupUrl = "https://www.facebook.com/groups/" + targetGroupId + "/?sorting_setting=CHRONOLOGICAL";
+  console.log("[Metus Silent Engine v1.2.1] Membuka silent background tab untuk:", groupUrl, "isAnonymous:", !!request.isAnonymous);
 
   let win = null;
   let tabId = null;
@@ -982,8 +1086,8 @@ async function executeSingleFacebookGroupPost(request) {
       }
     }
 
-    activeAutomationTabId = tabId;
-    activeAutomationWindowId = win && win.id ? win.id : null;
+    if (tabId) activeAutomationTabIds.add(tabId);
+    if (win && win.id) activeAutomationWindowIds.add(win.id);
 
     if (!tabId) {
       throw new Error("Gagal membuat tab latar belakang untuk grup Facebook.");
@@ -1086,8 +1190,8 @@ async function executeSingleFacebookGroupPost(request) {
     };
   } finally {
     clearInterval(keepAliveTimer);
-    if (activeAutomationTabId === tabId) activeAutomationTabId = null;
-    if (win && activeAutomationWindowId === win.id) activeAutomationWindowId = null;
+    if (tabId) activeAutomationTabIds.delete(tabId);
+    if (win && win.id) activeAutomationWindowIds.delete(win.id);
     if (tabId) {
       setTimeout(() => {
         try { chrome.tabs.remove(tabId); } catch (e) {}
@@ -2695,14 +2799,15 @@ function autoScanGroups() {
         for (let i = 0; i < node.length; i++) walkNode(node[i]);
         return;
       }
-      const isGrp =
+      const isStrictGrp =
         node.__typename === 'Group' ||
-        node.__isGroup === 'Group' ||
-        (typeof node.url === 'string' && node.url.includes('/groups/'));
-      if (isGrp && typeof node.name === 'string' && node.name.trim().length >= 2) {
+        node.__isGroup === 'Group';
+      const hasGrpUrl =
+        typeof node.url === 'string' && node.url.includes('/groups/');
+      if ((isStrictGrp || hasGrpUrl) && typeof node.name === 'string' && node.name.trim().length >= 2) {
         const cleanName = stripGroupMetadata(node.name);
-        if (node.id && isValidGroupName(cleanName, node.id)) {
-          const gid = String(node.id);
+        if (isStrictGrp && node.id && /^\\d{5,25}$/.test(String(node.id).trim()) && isValidGroupName(cleanName, node.id)) {
+          const gid = String(node.id).trim();
           groupMap.set(gid, {
             id: gid,
             name: cleanName,
@@ -2710,11 +2815,12 @@ function autoScanGroups() {
             isPlaceholder: false,
           });
         }
-        if (typeof node.url === 'string') {
+        if (hasGrpUrl) {
           const um = node.url.match(/\\/groups\\/([a-zA-Z0-9.\\-_]{3,60})/);
           if (um && um[1]) {
             const slug = um[1].split('?')[0].split('/')[0];
-            if (slug && !ignore.has(slug.toLowerCase()) && isValidGroupName(cleanName, slug)) {
+            const isBogus = /^(Ym9va21hcms|Z3JvdXA6|c2hvcnRjdXQ6|ZmVlZF8|dXNlcjo|cGFnZTo)/i.test(slug) || slug.includes('=');
+            if (slug && !isBogus && !ignore.has(slug.toLowerCase()) && isValidGroupName(cleanName, slug)) {
               groupMap.set(slug, {
                 id: slug,
                 name: cleanName,
@@ -3093,9 +3199,9 @@ if (isExtensionContextAlive()) {
   const isFirstBridgeLoadInTab = !window.__metus_dashboard_bridge_loaded;
   window.__metus_dashboard_bridge_loaded = true;
   document.documentElement.setAttribute("data-metus-bridge-active", "1");
-  document.documentElement.setAttribute("data-metus-bridge-version", "1.2.0");
-  document.documentElement.setAttribute("data-metus-ext-version", "1.2.0");
-  console.log("[Metus Bridge v1.2.0] Active & connected to Web Dashboard (Anti-Throttle Timer + Auto-Comment + Queue Abort + Buy/Sell Support + 1:1 Linebreaks + Multi-Photo).");
+  document.documentElement.setAttribute("data-metus-bridge-version", "1.2.1");
+  document.documentElement.setAttribute("data-metus-ext-version", "1.2.1");
+  console.log("[Metus Bridge v1.2.1] Active & connected to Web Dashboard (Multi-Thread Concurrent Engine + Filter Anti-Bookmark Base64 + Auto-Comment + Multi-Photo).");
 
   function hideLegacyUpdateBanner() {
     try {
@@ -3153,11 +3259,25 @@ if (isExtensionContextAlive()) {
     return domPhotos;
   }
 
+  function isBogusBridgeGroupId(rawId) {
+    if (!rawId) return true;
+    const str = String(rawId).trim();
+    if (!str || str.length < 2) return true;
+    if (/^(Ym9va21hcms|Z3JvdXA6|c2hvcnRjdXQ6|ZmVlZF8|dXNlcjo|cGFnZTo|bm90aWZpY2F0aW9u)/i.test(str)) {
+      return true;
+    }
+    if (str.includes("=") || str.includes(":")) return true;
+    return false;
+  }
+
   function syncToLocalStorageAndPostMessage(userId, groups) {
     if (!Array.isArray(groups) || groups.length === 0) return;
 
+    const cleanGroups = groups.filter((g) => g && g.id && !isBogusBridgeGroupId(g.id));
+    if (cleanGroups.length === 0) return;
+
     try {
-      const formattedForStorage = groups.map((g, idx) => {
+      const formattedForStorage = cleanGroups.map((g, idx) => {
         const idStr = String(g.id || "");
         const nameStr = String(g.name || idStr).trim();
         const words = nameStr.replace(/^(grup|komunitas)\\s+(fb|facebook)\\s*#?/i, "").trim().split(/\\s+/).filter(Boolean);
@@ -3194,8 +3314,8 @@ if (isExtensionContextAlive()) {
       window.postMessage({
         type: "METUS_EXTENSION_SYNC",
         userId: userId,
-        groups: groups,
-        bridgeVersion: "1.2.0",
+        groups: cleanGroups,
+        bridgeVersion: "1.2.1",
       }, window.location.origin);
     }, delay);
   }
@@ -3309,6 +3429,8 @@ if (isExtensionContextAlive()) {
           action: "EXECUTE_POST",
           resultId: rId,
           groupId: grpId,
+          groupName: event.data.groupName || "",
+          maxConcurrency: event.data.maxConcurrency || 3,
           content: event.data.content,
           firstComment: event.data.firstComment,
           photoUrls: resolvedPhotoUrls,
